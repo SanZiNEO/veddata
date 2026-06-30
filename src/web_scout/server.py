@@ -50,13 +50,8 @@ def scout_open(url: str, mode: str = "auto") -> str:
             return ("登录未完成，请在浏览器中手动登录，然后调用 scout_wait_login()。\n"
                     "如果要换目标页面，先调用 scout_close() 关闭当前会话。")
 
-    if _browser:
-        try:
-            _browser.close()
-        except Exception:
-            pass
-
-    _browser = BrowserSession()
+    if not _browser:
+        _browser = BrowserSession()
     _current_url = url
     _current_mode = mode
 
