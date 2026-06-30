@@ -17,7 +17,10 @@ class BrowserSession:
             co.set_address(address)
         else:
             co.set_address("127.0.0.1:9222")
-            user_data = os.environ.get("USER_DATA_DIR", "./.web-scout-data")
+            user_data = os.environ.get("USER_DATA_DIR", "")
+            if not user_data:
+                import pathlib
+                user_data = str(pathlib.Path(__file__).parent.parent.parent / ".web-scout-data")
             co.set_user_data_path(user_data)
 
         if os.environ.get("HEADLESS", "false") == "true":

@@ -60,23 +60,27 @@ def scout_open(url: str, mode: str = "auto") -> str:
     _current_url = url
     _current_mode = mode
 
-    _monitor = NetworkMonitor(_browser.tab)
-    _monitor.start()
-
     try:
         result = _browser.open(url)
     except Exception as e:
         return f"Failed to open page: {e}"
 
-    import time
-    time.sleep(3)
-    api_count = _monitor.wait_new(timeout=3.0)
-
     _login = LoginDetector(_browser.tab)
     if _login.is_login_required():
         _login_pending = True
-        return ("此页面需要登录。登录后可获取完整 cookies 和更多 API 端点。\n"
-                "请在浏览器中手动登录，然后调用 scout_wait_login() 继续。")
+        title = _browser.tab.title or url
+        text = _browser.get_text()
+        return (f"页面已打开: {title}\n\n"
+                f"=== 页面文本 ===\n{text}\n\n"
+                f"⚠️ 此页面需要登录。登录后可获取完整 cookies 和更多 API 端点。\n"
+                f"请在浏览器中手动登录，然后调用 scout_wait_login() 继续。")
+
+    _monitor = NetworkMonitor(_browser.tab)
+    _monitor.start()
+
+    import time
+    time.sleep(3)
+    api_count = _monitor.wait_new(timeout=3.0)
 
     _dom = DOMScanner(_browser.tab)
 
