@@ -10,28 +10,38 @@ class BrowserSession:
     """Manages a Chromium browser session for page navigation and text extraction."""
 
     def __init__(self):
-        co = ChromiumOptions()
+        if os.environ.get("HEADLESS", "false") == "true":
+            headless = True
+        else:
+            headless = False
+
+        browser_path = os.environ.get("BROWSER_PATH", "")
+        user_data = os.environ.get("USER_DATA_DIR", "")
 
         address = os.environ.get("BROWSER_ADDRESS", "")
         if address:
-            co.set_address(address)
-        else:
-            co.auto_port(True)
-            user_data = os.environ.get("USER_DATA_DIR", "")
-            if user_data:
-                co.set_user_data_path(user_data)
+            co = ChromiumOptions().set_address(address)
+            self._browser = Chromium(co)
+            self.tab = self._browser.latest_tab
+            return
 
-        if os.environ.get("HEADLESS", "false") == "true":
-            co.headless(True)
-
-        browser_path = os.environ.get("BROWSER_PATH", "")
-        if browser_path == "edge":
-            co.set_browser_path(edge=True)
-        elif browser_path:
-            co.set_browser_path(browser_path)
-
-        self._browser = Chromium(co)
-        self.tab = self._browser.latest_tab
+        for port in range(9222, 9232):
+            try:
+                co = ChromiumOptions().set_local_port(port)
+                if headless:
+                    co.headless(True)
+                if browser_path == "edge":
+                    co.set_browser_path(edge=True)
+                elif browser_path:
+                    co.set_browser_path(browser_path)
+                if user_data:
+                    co.set_user_data_path(user_data)
+                self._browser = Chromium(co)
+                self.tab = self._browser.latest_tab
+                return
+            except Exception:
+                continue
+        raise RuntimeError("No available browser port in 9222-9231")
 
     def open(self, url: str) -> dict:
         """Open URL and return page info.
