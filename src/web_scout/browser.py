@@ -11,7 +11,12 @@ class BrowserSession:
 
     def __init__(self):
         co = ChromiumOptions()
-        co.auto_port(True)
+
+        address = os.environ.get("BROWSER_ADDRESS", "")
+        if address:
+            co.set_address(address)
+        else:
+            co.auto_port(True)
 
         if os.environ.get("HEADLESS", "false") == "true":
             co.headless(True)

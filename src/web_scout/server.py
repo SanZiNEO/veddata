@@ -42,6 +42,14 @@ def scout_open(url: str, mode: str = "auto") -> str:
     global _browser, _monitor, _dom, _login, _exporter
     global _current_url, _current_mode, _login_pending
 
+    if _login_pending and _browser:
+        login = LoginDetector(_browser.tab)
+        if not login.is_login_required():
+            _login_pending = False
+        else:
+            return ("登录未完成，请在浏览器中手动登录，然后调用 scout_wait_login()。\n"
+                    "如果要换目标页面，先调用 scout_close() 关闭当前会话。")
+
     if _browser:
         try:
             _browser.close()
