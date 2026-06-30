@@ -185,8 +185,15 @@ def scout_wait_login(timeout: int = 300) -> str:
         _login_pending = False
         _monitor = NetworkMonitor(_browser.tab)
         _monitor.start()
+        _dom = DOMScanner(_browser.tab)
+        _exporter = Exporter()
+        import time
+        time.sleep(3)
+        api_count = _monitor.wait_new(timeout=3.0)
         text = _browser.get_text()
-        return f"Login successful! Page refreshed.\n\nPage text:\n{text[:2000]}"
+        return (f"登录成功！已刷新页面\n\n"
+                f"API: {api_count} 个\n\n"
+                f"页面文本:\n{text[:2000]}")
     else:
         return f"Login timeout ({timeout}s). Please try again."
 
