@@ -67,7 +67,8 @@ def scout_open(url: str, mode: str = "auto") -> str:
     _login = LoginDetector(_browser.tab)
     if _login.is_login_required():
         _login_pending = True
-        return "This page requires login. Call scout_wait_login() to wait for manual login."
+        return ("此页面需要登录。登录后可获取完整 cookies 和更多 API 端点。\n"
+                "请在浏览器中手动登录，然后调用 scout_wait_login() 继续。")
 
     _dom = DOMScanner(_browser.tab)
 
