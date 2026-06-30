@@ -1,5 +1,7 @@
 # Web Scout
 
+> **Disclaimer**: This project is for educational and research purposes only. Users are responsible for complying with target websites' robots.txt and terms of service. The author does not encourage or participate in any unlawful use.
+
 MCP server for **web data source discovery** — not a scraper. Finds where data lives and what it looks like so AI can write the scraper.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -113,3 +115,7 @@ src/web_scout/
 ## License
 
 MIT © [ShanZhi](https://github.com/SanZiNEO)
+
+---
+
+> **Disclaimer**: This project is for educational and research purposes only. Users are responsible for complying with target websites' robots.txt and terms of service. The author does not encourage or participate in any unlawful use.
