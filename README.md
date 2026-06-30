@@ -64,6 +64,7 @@ pip install -e .
 | `BROWSER_PATH` | 自动 | 浏览器路径，`"edge"` 使用 Edge |
 | `USER_DATA_DIR` | 临时 | 持久化用户文件夹，保留登录态 |
 | `LOGIN_TIMEOUT` | `"300"` | 登录最大等待秒数 |
+| `MAX_TEXT_LENGTH` | `"3000"` | 页面文本最大字符数 |
 
 ## 工具
 
@@ -76,7 +77,11 @@ pip install -e .
 | `scout_inspect_api` | 查看 API 的完整请求和响应 |
 | `scout_list_elements` | 列出页面元素供 AI 选择 |
 | `scout_click` | 点击指定元素 |
+| `scout_search` | 关键字搜索：先搜 API body，无匹配自动回退到 DOM |
+| `scout_fetch_api` | 验证模式：打开页面 → 监听 → 按 path 匹配 API → 一步返回详情 |
+| `scout_inspect_dom` | 验证模式：打开页面 → 按关键词扫 DOM 容器 → 一步返回 |
 | `scout_export` | 导出原始数据包 + 压缩字段文档 |
+| `scout_close` | 关闭当前浏览器会话，释放资源 |
 
 ## 示例
 

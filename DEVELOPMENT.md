@@ -320,6 +320,7 @@ tab.listen.start()
 | `LOGIN_TIMEOUT` | `"300"` | 登录等待秒数 |
 | `USER_DATA_DIR` | 空 | 持久化用户文件夹 |
 | `AUTO_CLOSE` | `"true"` | 导出后自动关浏览器 |
+| `MAX_TEXT_LENGTH` | `"3000"` | 页面文本最大字符数 |
 
 ---
 
