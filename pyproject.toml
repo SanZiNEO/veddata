@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "web-scout"
+version = "0.1.0"
+description = "MCP server for web API & DOM discovery"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "ShanZhi", email = "SanZiNEO@outlook.com"},
+]
+keywords = ["mcp", "scraping", "web", "api-discovery", "automation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Software Development :: Libraries",
+]
+
+dependencies = [
+    "DrissionPage>=4.1",
+    "fastmcp>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/SanZiNEO/web-scout"
+Repository = "https://github.com/SanZiNEO/web-scout.git"
+Issues = "https://github.com/SanZiNEO/web-scout/issues"
+
+[project.scripts]
+web-scout = "web_scout.server:main"
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.packages.find]
+where = ["src"]
