@@ -10,24 +10,9 @@ class LoginDetector:
         self.tab = tab
 
     def is_login_required(self) -> bool:
-        """Check if the current page requires login.
-
-        Checks both URL patterns and page text for login indicators.
-        """
+        """Check if the page REDIRECTED to a login page (URL-level)."""
         url = self.tab.url.lower()
-        if any(p in url for p in ("/login", "/signin", "/auth")):
-            return True
-
-        text = self._page_text()
-        text_lower = text.lower()
-        if text_lower.count("请登录") >= 2:
-            return True
-        if "立即登录" in text_lower:
-            return True
-        if "扫码登录" in text_lower:
-            return True
-
-        return False
+        return any(p in url for p in ("/login", "/signin", "/auth"))
 
     def wait_for_login(self, timeout: int = 300) -> bool:
         """Wait for the user to manually log in.

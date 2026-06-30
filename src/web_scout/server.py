@@ -12,6 +12,11 @@ from web_scout.export import Exporter
 
 mcp = FastMCP("web-scout", instructions="AI-powered web API & DOM discovery tool")
 
+_response_dir = os.environ.get("RESPONSE_DIR", "./response")
+if os.path.exists(_response_dir):
+    import shutil
+    shutil.rmtree(_response_dir)
+
 _browser: BrowserSession | None = None
 _monitor: NetworkMonitor | None = None
 _dom: DOMScanner | None = None
@@ -47,18 +52,22 @@ def scout_open(url: str, mode: str = "auto") -> str:
     _current_url = url
     _current_mode = mode
 
+    _monitor = NetworkMonitor(_browser.tab)
+    _monitor.start()
+
     try:
         result = _browser.open(url)
     except Exception as e:
         return f"Failed to open page: {e}"
 
+    import time
+    time.sleep(3)
+    api_count = _monitor.wait_new(timeout=3.0)
+
     _login = LoginDetector(_browser.tab)
     if _login.is_login_required():
         _login_pending = True
         return "This page requires login. Call scout_wait_login() to wait for manual login."
-
-    _monitor = NetworkMonitor(_browser.tab)
-    _monitor.start()
 
     _dom = DOMScanner(_browser.tab)
 
@@ -70,7 +79,7 @@ def scout_open(url: str, mode: str = "auto") -> str:
         "=== Page Text ===",
         result["text"],
         "",
-        f"APIs loaded on page: {result['api_count']}",
+        f"APIs loaded on page: {api_count}",
     ]
 
     if mode == "api":
