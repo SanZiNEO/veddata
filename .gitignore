@@ -216,14 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
-/xiaohongshu_crawler
-/TEST
-小红书Cookie获取器.exe
-xhs_crawler/data/xhs.db
-xhs_crawler/cookies/xhs_20260528_152148.json
-/xhs_crawler/cookies
-xhs_crawler/keywords.csv
-xhs_crawler/keywords.csv
-/xhs_crawler/output
-/xhs_crawler/data
-xhs_crawler/keywords.csv
+
+# web-scout
+.web-scout-data/
+response/
+

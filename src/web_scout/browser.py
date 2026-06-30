@@ -16,7 +16,9 @@ class BrowserSession:
         if address:
             co.set_address(address)
         else:
-            co.auto_port(True)
+            co.set_address("127.0.0.1:9222")
+            user_data = os.environ.get("USER_DATA_DIR", "./.web-scout-data")
+            co.set_user_data_path(user_data)
 
         if os.environ.get("HEADLESS", "false") == "true":
             co.headless(True)
@@ -26,10 +28,6 @@ class BrowserSession:
             co.set_browser_path(edge=True)
         elif browser_path:
             co.set_browser_path(browser_path)
-
-        user_data = os.environ.get("USER_DATA_DIR", "")
-        if user_data:
-            co.set_user_data_path(user_data)
 
         self._browser = Chromium(co)
         self.tab = self._browser.latest_tab
