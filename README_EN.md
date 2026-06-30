@@ -118,4 +118,13 @@ MIT © [ShanZhi](https://github.com/SanZiNEO)
 
 ---
 
-> **Disclaimer**: This project is for educational and research purposes only. Users are responsible for complying with target websites' robots.txt and terms of service. The author does not encourage or participate in any unlawful use.
+> **Disclaimer**
+> 
+> Web Scout is a general-purpose web data source discovery tool. It does not initiate scraping requests, nor does it store or transmit any website data. Users should:
+> 
+> 1. Respect target websites' `robots.txt` and Terms of Service
+> 2. Control request frequency to avoid causing excessive load
+> 3. Only scrape publicly available data; do not bypass authentication or authorization
+> 4. Assume full legal responsibility for their use of this tool
+> 
+> The author (ShanZhi / SanZiNEO) does not encourage or participate in any use that violates laws, regulations, or website terms. This project is intended solely for educational, research, and technical exchange purposes.
