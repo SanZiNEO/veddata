@@ -218,12 +218,22 @@ def scout_inspect_api(index: int) -> str:
         index: API endpoint ID (from scout_list_apis output).
 
     Returns:
-        Formatted request/response details.
+        Formatted request/response details + compressed field document.
     """
     if not _monitor:
         return "Error: call scout_open first."
 
-    return _monitor.get_api(index)
+    record = _monitor.get_record(index)
+    if not record:
+        return _monitor.get_api(index)
+
+    inspect_text = _monitor.get_api(index)
+    compact_text = _exporter.compact(record) if _exporter else ""
+    
+    parts = [inspect_text]
+    if compact_text:
+        parts.extend(["", "=== Field Document ===", compact_text])
+    return "\n".join(parts)
 
 
 @mcp.tool()
