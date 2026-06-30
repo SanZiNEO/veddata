@@ -501,6 +501,33 @@ def scout_close() -> str:
     _login_pending = False
 
     return "Browser closed."
+
+
+@mcp.tool()
+def scout_list_browsers() -> str:
+    """List all running browser instances on ports 9222-9231.
+
+    Shows which ports have active browsers. AI can then decide
+    which ones to keep and call scout_close to clean up the rest.
+    """
+    from DrissionPage import Chromium, ChromiumOptions
+
+    lines = ["Running browser instances:"]
+    running = 0
+    for port in range(9222, 9232):
+        try:
+            co = ChromiumOptions().set_address(f"127.0.0.1:{port}")
+            browser = Chromium(co)
+            tab = browser.latest_tab
+            title = tab.title[:50] if tab.title else "(no title)"
+            url = tab.url[:60] if tab.url else "about:blank"
+            lines.append(f"  [{port}] {title} — {url}")
+            running += 1
+        except Exception:
+            lines.append(f"  [{port}] (free)")
+
+    lines.append(f"\n{running} active, {10 - running} free")
+    return "\n".join(lines)
     
 
 def main():
