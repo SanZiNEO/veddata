@@ -410,21 +410,31 @@ class NetworkMonitor:
 
     def _extract_from_html(self) -> dict:
         """Extract SSR data from raw HTML source using brace counting."""
+        import re as _re
         html = self.tab.html
         results = {}
         for name in ['__INITIAL_STATE__', '__NEXT_DATA__', '__NUXT__',
                      '__PRELOADED_STATE__', '__APP_DATA__', '__ASYNC_DATA__']:
-            marker = f'window.{name} = '
-            pos = html.find(marker)
+            # 尝试多种格式: window.XXX = {, window['XXX'] = {, XXX = {  
+            pos = -1
+            for fmt in (f'window.{name} = ', f'window.{name}=', f"window['{name}'] = "):
+                p = html.find(fmt)
+                if p != -1:
+                    pos = p
+                    break
             if pos == -1:
-                # 也找 window['__INITIAL_STATE__'] 格式
-                marker = f"window['{name}'] = "
-                pos = html.find(marker)
-            if pos == -1:
+                # 兜底: 只搜变量名本身
+                p = html.find(f'{name} = ')
+                if p == -1:
+                    p = html.find(f'{name}=')
+                if p == -1:
+                    continue
+                pos = p
+            # 从 marker 后找到 JSON 开头 {
+            json_start = html.find('{', pos)
+            if json_start == -1:
                 continue
-            pos += len(marker)
-            if pos >= len(html) or html[pos] != '{':
-                continue
+            pos = json_start
             depth = 0
             end = pos
             for i in range(pos, len(html)):
@@ -438,6 +448,10 @@ class NetworkMonitor:
             text = html[pos:end]
             if len(text) < 20:
                 continue
+            # JS → JSON 规范化: undefined → null, 尾随逗号清理
+            import re as _re
+            text = _re.sub(r'\bundefined\b', 'null', text)
+            text = _re.sub(r',\s*}', '}', text)
             try:
                 data = json.loads(text)
                 if isinstance(data, dict) and len(data) >= 2:
