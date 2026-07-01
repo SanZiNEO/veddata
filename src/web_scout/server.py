@@ -229,6 +229,7 @@ def scout_action(action: str, value: str | None = None) -> str:
         try:
             api_before = len(_monitor.api_records) if _monitor else 0
             dom_before = len(_dom.containers_cache) if _dom else 0
+            counts_snapshot = _monitor.get_count_snapshot() if _monitor else {}
 
             if value is None or value == "bottom":
                 _browser.tab.scroll.to_bottom()
@@ -259,6 +260,7 @@ def scout_action(action: str, value: str | None = None) -> str:
             time.sleep(2)
 
             new_apis = _monitor.wait_new(timeout=3.0) if _monitor else 0
+            recurring = _monitor.recurring_since(counts_snapshot) if _monitor else []
 
             dom_new = 0
             dom_total = 0
@@ -270,10 +272,11 @@ def scout_action(action: str, value: str | None = None) -> str:
             parts = [f"Scrolled to {desc}."]
 
             if _monitor:
-                if new_apis > 0:
-                    parts.append(f"{new_apis} new APIs captured (total: {len(_monitor.api_records)}).")
-                else:
-                    parts.append(f"0 new APIs. Total: {len(_monitor.api_records)}.")
+                parts.append(f"{new_apis} new, {len(recurring)} recurring, {len(_monitor.api_records)} total APIs.")
+                if recurring:
+                    parts.append("Recurring (likely pagination/feed):")
+                    for rec in recurring[:5]:
+                        parts.append(f"  [{rec['id']}] {rec['method']} {rec['path']} ×{rec['count']}")
 
             if _dom:
                 if dom_new > 0:
@@ -281,7 +284,7 @@ def scout_action(action: str, value: str | None = None) -> str:
                 else:
                     parts.append(f"DOM: {dom_total} containers (no new).")
 
-            return " ".join(parts)
+            return "\n".join(parts)
 
         except Exception as e:
             return f"Scroll failed: {e}"

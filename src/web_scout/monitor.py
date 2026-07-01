@@ -81,6 +81,19 @@ class NetworkMonitor:
         self.step(timeout=timeout)
         return len(self.api_records) - before
 
+    def get_count_snapshot(self) -> dict:
+        """Snapshot each API's hit count for later diff detection."""
+        return {rec["path"]: rec["count"] for rec in self.api_records}
+
+    def recurring_since(self, snapshot: dict) -> list[dict]:
+        """Return records whose hit count increased since the snapshot."""
+        recurring = []
+        for rec in self.api_records:
+            old_count = snapshot.get(rec["path"], 0)
+            if rec["count"] > old_count:
+                recurring.append(rec)
+        return recurring
+
     def filter_and_store(self, packet) -> bool:
         """Check whether a packet is a JSON API and store it.
 
