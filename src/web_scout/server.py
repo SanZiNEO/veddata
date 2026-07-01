@@ -158,13 +158,77 @@ def scout_analyze() -> str:
     containers = _dom.find_containers()
     dom_count = len(_dom.containers_cache)
 
-    parts = [f"{_browser.tab_label()}",
-             f"Analyze complete: {api_count} APIs, {dom_count} DOM containers, {embedded_count} embedded data sources."]
-    if api_count > 0 or embedded_count > 0:
-        parts.append("Use scout_list_apis() to list all captured endpoints.")
-    if dom_count > 0:
-        parts.append("Use scout_list_elements() to list interactive elements and containers.")
+    parts = [f"{_browser.tab_label()}", ""]
 
+    # 1. Network APIs — inline list
+    parts.append("=== Network APIs ===")
+    if api_count > 0:
+        api_list = _monitor.list_apis()
+        lines = api_list.split("\n")
+        parts.append(f"{api_count} captured:")
+        parts.extend(lines[:8])
+        if len(lines) > 8:
+            parts.append(f"... and {len(lines) - 8} more (use scout_list_apis() for full list)")
+    else:
+        parts.append("0 — 此页面是服务端渲染(SSR)，数据在 HTML DOM 中")
+        parts.append("→ 使用 scout_fetch() 获取页面全部可见文本")
+        parts.append("→ 使用 scout_context(关键词) 精确定位数据")
+    parts.append("")
+
+    # 2. DOM structure — containers + semantic tags
+    parts.append(f"=== DOM 结构 ({dom_count} 容器) ===")
+    try:
+        tab = _browser.get_current_tab()
+        js = """
+        (function() {
+            var r = {};
+            var m = document.querySelector('meta[name="description"]');
+            if (m) r.meta = m.getAttribute('content').substring(0, 200);
+            var h1s = document.querySelectorAll('h1');
+            r.h1 = Array.from(h1s).slice(0,3).map(function(e){return e.textContent.trim().substring(0,100)});
+            var h2s = document.querySelectorAll('h2');
+            r.h2 = Array.from(h2s).slice(0,3).map(function(e){return e.textContent.trim().substring(0,100)});
+            return JSON.stringify(r);
+        })()
+        """
+        import json as _json
+        raw = tab.run_js(js)
+        if raw and isinstance(raw, str):
+            tags = _json.loads(raw)
+            if tags.get("meta"):
+                parts.append(f"  desc: {tags['meta'][:150]}")
+            for tag in ("h1", "h2"):
+                if tags.get(tag):
+                    for t in tags[tag]:
+                        parts.append(f"  {tag}: {t[:120]}")
+    except Exception:
+        pass
+
+    if dom_count > 0:
+        parts.append("  容器预览 (scout_list_elements 查看完整):")
+        from web_scout.dom import DOMScanner as _D  # lazy import to get cache format
+        cached = _dom.containers_cache
+        for i, c in enumerate(cached[:5]):
+            cls_name = c.get("selector", c.get("class", "?"))[:40]
+            count = c.get("count", c.get("num", "?"))
+            samples = c.get("samples", c.get("fields", []))
+            sample_str = ", ".join([s.get("name", s)[:15] if isinstance(s, dict) else str(s)[:15] for s in samples[:6]])
+            parts.append(f"  [{i+1}] {cls_name} ×{count}")
+            if sample_str:
+                parts.append(f"      └─ {sample_str}")
+    parts.append("")
+
+    # 3. Embedded JSON
+    parts.append("=== Embedded JSON (SSR) ===")
+    if embedded_count > 0:
+        parts.append(f"{embedded_count} 个 [SSR] 数据源，scout_list_apis() 可查看")
+    else:
+        parts.append("0")
+    parts.append("")
+
+    # 4. Tool guide
+    parts.append("---")
+    parts.append("scout_list_apis | scout_list_elements | scout_fetch | scout_context(kw) | scout_search(kw)")
 
     return "\n".join(parts)
 
