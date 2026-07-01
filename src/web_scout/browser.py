@@ -1,10 +1,8 @@
 """Browser module — Chromium lifecycle, page navigation, text extraction."""
 
 import os
-import re
 
 from DrissionPage import Chromium, ChromiumOptions
-from trafilatura import extract as trafilatura_extract
 
 
 class BrowserSession:
@@ -71,86 +69,15 @@ class BrowserSession:
         return {"title": title, "text": text}
 
     def get_text(self) -> str:
-        """Extract page text as Markdown using trafilatura, fallback to regex."""
-        html = self.tab.html
+        """Extract all visible text from the page (document.body.innerText)."""
         max_len = int(os.environ.get("MAX_TEXT_LENGTH", "3000"))
-
-        if os.environ.get("TEXT_EXTRACTOR", "") != "legacy":
-            try:
-                result = trafilatura_extract(
-                    html,
-                    output_format='markdown',
-                    include_tables=True,
-                    include_links=False,
-                    include_images=False,
-                    include_comments=False,
-                    favor_precision=True,
-                )
-                if result and len(result.strip()) > 20:
-                    return result[:max_len]
-            except Exception:
-                pass
-
-        html = re.sub(
-            r'<script[^>]*>.*?</script>',
-            "",
-            html,
-            flags=re.DOTALL | re.IGNORECASE,
-        )
-        html = re.sub(
-            r'<style[^>]*>.*?</style>',
-            "",
-            html,
-            flags=re.DOTALL | re.IGNORECASE,
-        )
-        html = re.sub(
-            r'<nav[^>]*>.*?</nav>',
-            "",
-            html,
-            flags=re.DOTALL | re.IGNORECASE,
-        )
-        html = re.sub(
-            r'<header[^>]*>.*?</header>',
-            "",
-            html,
-            flags=re.DOTALL | re.IGNORECASE,
-        )
-        html = re.sub(
-            r'<footer[^>]*>.*?</footer>',
-            "",
-            html,
-            flags=re.DOTALL | re.IGNORECASE,
-        )
-        html = re.sub(
-            r'<noscript[^>]*>.*?</noscript>',
-            "",
-            html,
-            flags=re.DOTALL | re.IGNORECASE,
-        )
-        html = re.sub(
-            r'<svg[^>]*>.*?</svg>',
-            "",
-            html,
-            flags=re.DOTALL | re.IGNORECASE,
-        )
-
-        text = re.sub(r'<[^>]+>', " ", html)
-        text = re.sub(r'\n\s*\n', "\n", text)
-        text = re.sub(r' {2,}', " ", text)
-        text = text.strip()
-
-        lines = text.split("\n")
-        deduped = []
-        prev = ""
-        for line in lines:
-            stripped = line.strip()
-            if stripped and stripped == prev:
-                continue
-            deduped.append(line)
-            prev = stripped
-        text = "\n".join(deduped)
-
-        return text[:max_len]
+        try:
+            text = self.tab.run_js("return document.body.innerText || ''")
+            if text:
+                return text[:max_len]
+        except Exception:
+            pass
+        return ""
 
     def close(self):
         """Close the browser."""
