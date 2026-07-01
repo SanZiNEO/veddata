@@ -287,17 +287,19 @@ def scout_action(action: str, value: str | None = None, container: str | None = 
                     _browser.tab.scroll.to_top()
                 desc = f"top (container: {container})" if container else "top"
             elif value == "down":
-                vp = _browser.tab.run_js(f"var el=document.querySelector('{container}') if '{container}' else null;return el?el.clientHeight:window.innerHeight;")
                 if container:
+                    vp = _browser.tab.run_js(f"(function(){{var el=document.querySelector('{container}');return el?el.clientHeight:window.innerHeight;}})()")
                     _browser.tab.run_js(f"var el=document.querySelector('{container}');if(el)el.scrollBy(0,{vp});")
                 else:
+                    vp = _browser.tab.run_js("return window.innerHeight")
                     _browser.tab.scroll.down(vp)
                 desc = f"down {vp}px{' (container)' if container else ''}"
             elif value == "up":
-                vp = _browser.tab.run_js(f"var el=document.querySelector('{container}') if '{container}' else null;return el?el.clientHeight:window.innerHeight;")
                 if container:
+                    vp = _browser.tab.run_js(f"(function(){{var el=document.querySelector('{container}');return el?el.clientHeight:window.innerHeight;}})()")
                     _browser.tab.run_js(f"var el=document.querySelector('{container}');if(el)el.scrollBy(0,-{vp});")
                 else:
+                    vp = _browser.tab.run_js("return window.innerHeight")
                     _browser.tab.scroll.up(vp)
                 desc = f"up {vp}px{' (container)' if container else ''}"
             elif value.lstrip("-").isdigit():
