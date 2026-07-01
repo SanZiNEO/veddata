@@ -26,11 +26,22 @@ WHAT IT DOES NOT DO:
 
 EXPECTED WORKFLOW:
   1. scout_open(url) → read page text first
-  2. scout_analyze() → capture ALL data: network APIs, SSR embedded JSON, DOM containers
-  3. scout_list_apis() → see all endpoints; [SSR] tag = embedded data (e.g. __INITIAL_STATE__)
-  4. scout_inspect_api(n) → view params + response structure
-  5. scout_inspect_api(n, "full") → see complete nested field tree
-  6. scout_export(n) → save raw JSON + field documentation
+  2. scout_fetch() → get full rendered text + links (for SPA/JS-heavy pages)
+  3. scout_analyze() → capture ALL data: network APIs, SSR embedded JSON, DOM containers
+  4. scout_list_apis() → see all endpoints; [SSR] tag = embedded data
+  5. scout_inspect_api(n) → view params + response structure
+  6. scout_inspect_api(n, "full") → see complete nested field tree
+  7. scout_search(keyword) → find which API has your keyword
+  8. scout_context(keyword) → see field paths and values for matches
+  9. scout_export(n) → save raw JSON + field documentation
+
+FETCH PRIORITY: Always use scout_fetch() for browser-rendered pages (B站/小红书/知乎/SPA).
+It captures ALL visible text including JS-rendered content. Other fetch MCP tools
+use HTTP requests that cannot render JavaScript. Only use other fetch tools if
+the page is confirmed to be static HTML without JS dependency.
+
+TAB MANAGEMENT: scout_list_tabs() shows all open tabs with numbers.
+scout_close(tab=N) closes a specific tab. Each return value includes [Tab #N].
 """)
 
 _response_dir = os.environ.get("RESPONSE_DIR", "./response")
@@ -122,13 +133,14 @@ def scout_open(url: str) -> str:
     _login = LoginDetector(_browser.tab)
     if _login.is_login_required():
         _login_pending = True
-        title = _browser.tab.title or url
+        title = _browser.get_current_tab().title or url
         text = _browser.get_text()
         return (f"页面已打开: {title}\n\n"
                 f"=== 页面文本 ===\n{text}\n\n"
                 f"⚠️ 此页面需要登录。请在浏览器中手动登录，然后调用 scout_wait_login() 继续。")
 
     lines = [
+        f"{_browser.tab_label()}",
         f"Page opened: {result['title'] or url}",
         "",
         "=== Page Text ===",
@@ -179,7 +191,8 @@ def scout_analyze() -> str:
     containers = _dom.find_containers()
     dom_count = len(_dom.containers_cache)
 
-    parts = [f"Analyze complete: {api_count} APIs, {dom_count} DOM containers, {embedded_count} embedded data sources."]
+    parts = [f"{_browser.tab_label()}",
+             f"Analyze complete: {api_count} APIs, {dom_count} DOM containers, {embedded_count} embedded data sources."]
     if api_count > 0 or embedded_count > 0:
         parts.append("Use scout_list_apis() to list all captured endpoints.")
     if dom_count > 0:
@@ -234,11 +247,11 @@ def scout_action(action: str, value: str | None = None, container: str | None = 
         try:
             import time
 
-            inputs = _browser.tab.eles(
+            inputs = _browser.get_current_tab().eles(
                 "css:input[type=text], css:input[type=search], css:input[placeholder*=搜索]"
             )
             if not inputs:
-                inputs = _browser.tab.eles(
+                inputs = _browser.get_current_tab().eles(
                     "css:input:not([type=hidden]):not([type=submit])"
                 )
 
@@ -275,40 +288,40 @@ def scout_action(action: str, value: str | None = None, container: str | None = 
 
             if value is None or value == "bottom":
                 if container:
-                    _browser.tab.run_js(f"var el=document.querySelector('{container}');if(el)el.scrollTo(0,el.scrollHeight);")
+                    _browser.get_current_tab().run_js(f"var el=document.querySelector('{container}');if(el)el.scrollTo(0,el.scrollHeight);")
                 else:
-                    _browser.tab.scroll.to_bottom()
+                    _browser.get_current_tab().scroll.to_bottom()
                 desc = f"bottom (container: {container})" if container else "bottom"
             elif value == "top":
                 if container:
-                    _browser.tab.run_js(f"var el=document.querySelector('{container}');if(el)el.scrollTo(0,0);")
+                    _browser.get_current_tab().run_js(f"var el=document.querySelector('{container}');if(el)el.scrollTo(0,0);")
                 else:
-                    _browser.tab.scroll.to_top()
+                    _browser.get_current_tab().scroll.to_top()
                 desc = f"top (container: {container})" if container else "top"
             elif value == "down":
                 if container:
-                    vp = _browser.tab.run_js(f"(function(){{var el=document.querySelector('{container}');return el?el.clientHeight:window.innerHeight;}})()")
-                    _browser.tab.run_js(f"var el=document.querySelector('{container}');if(el)el.scrollBy(0,{vp});")
+                    vp = _browser.get_current_tab().run_js(f"(function(){{var el=document.querySelector('{container}');return el?el.clientHeight:window.innerHeight;}})()")
+                    _browser.get_current_tab().run_js(f"var el=document.querySelector('{container}');if(el)el.scrollBy(0,{vp});")
                 else:
-                    vp = _browser.tab.run_js("return window.innerHeight")
-                    _browser.tab.scroll.down(vp)
+                    vp = _browser.get_current_tab().run_js("return window.innerHeight")
+                    _browser.get_current_tab().scroll.down(vp)
                 desc = f"down {vp}px{' (container)' if container else ''}"
             elif value == "up":
                 if container:
-                    vp = _browser.tab.run_js(f"(function(){{var el=document.querySelector('{container}');return el?el.clientHeight:window.innerHeight;}})()")
-                    _browser.tab.run_js(f"var el=document.querySelector('{container}');if(el)el.scrollBy(0,-{vp});")
+                    vp = _browser.get_current_tab().run_js(f"(function(){{var el=document.querySelector('{container}');return el?el.clientHeight:window.innerHeight;}})()")
+                    _browser.get_current_tab().run_js(f"var el=document.querySelector('{container}');if(el)el.scrollBy(0,-{vp});")
                 else:
-                    vp = _browser.tab.run_js("return window.innerHeight")
-                    _browser.tab.scroll.up(vp)
+                    vp = _browser.get_current_tab().run_js("return window.innerHeight")
+                    _browser.get_current_tab().scroll.up(vp)
                 desc = f"up {vp}px{' (container)' if container else ''}"
             elif value.lstrip("-").isdigit():
                 px = int(value)
                 if container:
-                    _browser.tab.run_js(f"var el=document.querySelector('{container}');if(el)el.scrollBy(0,{px});")
+                    _browser.get_current_tab().run_js(f"var el=document.querySelector('{container}');if(el)el.scrollBy(0,{px});")
                 elif px >= 0:
-                    _browser.tab.scroll.down(px)
+                    _browser.get_current_tab().scroll.down(px)
                 else:
-                    _browser.tab.scroll.up(abs(px))
+                    _browser.get_current_tab().scroll.up(abs(px))
                 desc = f"{'down' if px >= 0 else 'up'} {abs(px)}px{' (container)' if container else ''}"
             else:
                 return f"Unsupported scroll value: '{value}'. Use 'top', 'bottom', 'down', 'up', or pixel number."
@@ -531,10 +544,10 @@ def scout_search(keyword: str) -> str:
 
     # 2. 页面 HTML 源码
     if _browser:
-        html = _browser.tab.html
+        html = _browser.get_current_tab().html
         if keyword.lower() in html.lower():
             lines.append(f"=== Page HTML matched === (contains '{keyword}' in source)")
-            lines.append(f"URL: {_browser.tab.url}")
+            lines.append(f"URL: {_browser.get_current_tab().url}")
             lines.append("Use scout_context() to see WHERE in the page source.")
 
     # 3. DOM 扫描
@@ -574,7 +587,7 @@ def scout_context(keyword: str) -> str:
 
     # Page meta + HTML 源码搜索
     if _browser:
-        html = _browser.tab.html
+        html = _browser.get_current_tab().html
         kw_lower = keyword.lower()
         # meta 标签
         js = """
@@ -593,7 +606,7 @@ def scout_context(keyword: str) -> str:
         return JSON.stringify(results);
         """
         try:
-            raw = _browser.tab.run_js(js)
+            raw = _browser.get_current_tab().run_js(js)
             meta_matches = _json.loads(raw)
             for m in meta_matches:
                 results.append({"source": f"[Page] {m['tag']}", "field": "", "value": m["value"]})
@@ -831,82 +844,47 @@ def scout_inspect_dom(url: str, keyword: str) -> str:
 
 
 @mcp.tool()
-def scout_close(port: int | None = None) -> str:
-    """Close a browser session.
+def scout_close(tab: int | None = None) -> str:
+    """Close a browser tab.
 
-    Without arguments: closes the current session tracked by scout_open.
-    With a port number: closes the browser on the specified port (9222-9231),
-    regardless of whether it's the "current" session.
+    Without arguments: closes the current tab.
+    With a tab number: closes the specified tab (e.g. tab=2).
 
     Args:
-        port: Optional port number to close. If omitted, closes current session.
+        tab: Optional tab number to close. If omitted, closes current tab.
 
     Returns:
         Status message.
     """
     global _browser, _monitor, _dom, _login_pending
 
-    if port is not None:
-        if not 9222 <= port <= 9231:
-            return f"Port {port} out of range (9222-9231)."
-
-        from DrissionPage import Chromium, ChromiumOptions
-        try:
-            co = ChromiumOptions().set_address(f"127.0.0.1:{port}")
-            browser = Chromium(co)
-            browser.quit()
-            return f"Browser on port {port} closed."
-        except Exception as e:
-            return f"Port {port} is already free or could not be closed: {e}"
-
     if not _browser:
-        return "No open browser session."
+        return "No browser session. Call scout_open first."
 
-    try:
-        _browser.close()
-    except Exception:
-        pass
+    result = _browser.close_tab(tab)
 
-    if _browser and _browser.port is not None:
-        _port_release(_browser.port)
-    _browser = None
-    _monitor = None
-    _dom = None
-    _login_pending = False
+    # Reset analysis state if only one tab left or no tabs
+    if not _browser._browser or not _browser._browser.tab_ids:
+        _monitor = None
+        _dom = None
+        _login_pending = False
 
-    return "Browser closed."
+    return result
 
 
 @mcp.tool()
-def scout_list_browsers() -> str:
-    """List all browser session ports tracked by this process.
+def scout_list_tabs() -> str:
+    """List all open browser tabs. Shows tab numbers, titles, and current active tab.
 
-    Uses in-memory state (no browser connection needed — fast).
-    Shows which ports have active sessions created by scout_open.
+    Use this to see which tabs are open and switch between them.
+    AI can reference tabs by number (e.g. "Tab #2") in other tools.
 
     Returns:
-        Per-port status list showing active sessions vs free ports.
+        Numbered list of tabs with titles and current marker.
     """
-    use_multi = os.environ.get("MULTI_BROWSER", "false") == "true"
-    port_range = range(9222, 9232) if use_multi else range(9222, 9223)
-
-    lines = ["Browser port status:"]
-    running = 0
-    for port in port_range:
-        info = _port_tracker.get(port)
-        if info:
-            url = (info.get("url") or "")[:60]
-            tool = info.get("last_tool", "?")
-            detail = info.get("detail", "")
-            lines.append(f"  [{port}] {tool} — {url}")
-            if detail:
-                lines.append(f"         {detail}")
-            running += 1
-        else:
-            lines.append(f"  [{port}] free")
-
-    lines.append(f"\n{running} active, {len(port_range) - running} free")
-    return "\n".join(lines)
+    if not _browser:
+        return "No browser session. Call scout_open first."
+    return _browser.list_tabs()
 
 
 @mcp.tool()
@@ -926,7 +904,7 @@ def scout_screenshot(name: str = "screenshot", full_page: bool = True) -> str:
         return "Error: call scout_open first."
 
     try:
-        path = _browser.tab.get_screenshot(name=f"{name}.png", full_page=full_page)
+        path = _browser.get_current_tab().get_screenshot(name=f"{name}.png", full_page=full_page)
         return f"Screenshot saved: {path}"
     except Exception as e:
         return f"Screenshot failed: {e}"
@@ -956,13 +934,13 @@ def scout_fetch(max_length: int = 5000, start_index: int = 0) -> str:
         return "Error: call scout_open first."
 
     try:
-        title = str(_browser.tab.title or "")
-        url = str(_browser.tab.url or "")
+        title = str(_browser.get_current_tab().title or "")
+        url = str(_browser.get_current_tab().url or "")
     except Exception:
         title, url = "", "about:blank"
 
     try:
-        text = _browser.tab.run_js("return document.body.innerText || ''")
+        text = _browser.get_current_tab().run_js("return document.body.innerText || ''")
         if not isinstance(text, str):
             text = ""
     except Exception:
@@ -970,7 +948,7 @@ def scout_fetch(max_length: int = 5000, start_index: int = 0) -> str:
 
     links = []
     try:
-        html = _browser.tab.html
+        html = _browser.get_current_tab().html
         import re as _re
         for m in _re.finditer(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', html, _re.DOTALL | _re.IGNORECASE):
             href, raw_text = m.group(1), m.group(2)
@@ -986,6 +964,7 @@ def scout_fetch(max_length: int = 5000, start_index: int = 0) -> str:
         links = []
 
     lines = [
+        f"{_browser.tab_label()}",
         f"Title: {title}",
         f"URL:   {url}",
         "",
