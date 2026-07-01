@@ -957,39 +957,34 @@ def scout_fetch(max_length: int = 5000, start_index: int = 0) -> str:
 
     import json as _json
 
-    js = """
-    (function() {
-        var r = {};
-        r.title = document.title || '';
-        r.url = location.href;
-        r.text = document.body.innerText || '';
-
-        var links = document.querySelectorAll('a[href]');
-        var arr = [];
-        for (var i = 0; i < links.length && arr.length < 100; i++) {
-            var h = links[i].href;
-            if (!h || h.indexOf('javascript:') === 0) continue;
-            var t = (links[i].textContent || '').trim().substring(0, 80);
-            if (!t) t = h.substring(0, 80);
-            arr.push(t + ' -> ' + h);
-        }
-        r.links = arr;
-        return JSON.stringify(r);
-    })()
-    """
     try:
-        raw = _browser.tab.run_js(js)
-        data = _json.loads(raw)
+        title = _browser.tab.title or ""
+        url = _browser.tab.url or ""
+        text = _browser.tab.run_js("return document.body.innerText || ''") or ""
+        links_raw = _browser.tab.run_js("""
+        (function() {
+            var links = document.querySelectorAll('a[href]');
+            var arr = [];
+            for (var i = 0; i < links.length && arr.length < 100; i++) {
+                var h = links[i].href;
+                if (!h || h.indexOf('javascript:') === 0) continue;
+                var t = (links[i].textContent || '').trim().substring(0, 80);
+                if (!t) t = h.substring(0, 80);
+                arr.push(t + ' -> ' + h);
+            }
+            return JSON.stringify(arr);
+        })()
+        """) or "[]"
+        links = _json.loads(links_raw)
     except Exception as e:
         return f"Fetch failed: {e}"
 
     lines = [
-        f"Title: {data.get('title', '')}",
-        f"URL:   {data.get('url', '')}",
+        f"Title: {title}",
+        f"URL:   {url}",
         "",
     ]
 
-    links = data.get("links", [])
     if links:
         lines.append(f"=== Links ({len(links)}) ===")
         for link in links[:50]:
@@ -998,7 +993,6 @@ def scout_fetch(max_length: int = 5000, start_index: int = 0) -> str:
             lines.append(f"... and {len(links) - 50} more")
         lines.append("")
 
-    text = data.get("text", "")
     max_len = min(max_length, 50000)
     chunk = text[start_index:start_index + max_len]
     lines.append("=== Page Text ===")
