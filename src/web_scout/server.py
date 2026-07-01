@@ -19,62 +19,41 @@ if os.path.exists(_response_dir):
 
 # Create MCP instance
 mcp = FastMCP("web-scout", instructions="""
-Web Scout is a DATA SOURCE DISCOVERY tool for AI agents. It uses a real Chromium
-browser to open web pages, extract rendered text, capture API requests, and scan
-DOM structure — then outputs compressed field documentation so you can write
-scrapers. It is NOT a scraper or browser automation tool on its own.
-
-WHAT IT DOES:
-- Opens pages in a real Chromium browser (DrissionPage) → renders JS, extracts text
-- Captures XHR/Fetch network requests and SSR-embedded JSON (__INITIAL_STATE__, etc.)
-- Scans DOM for repeated data containers with CSS selectors and sample values
-- Triggers searches, scrolls, and clicks to discover pagination/feed APIs
-- Outputs compressed field documents (token-efficient) + saves raw JSON to disk
-- Detects login walls and guides users through manual login with CAPTCHA handling
-
-WHAT IT DOES NOT DO:
-- Decrypt JS-obfuscated data, reverse wasm, or bypass signature algorithms
-- Modify request headers, manage cookies, or forge requests
-- Execute as a standalone scraper — it discovers data sources, you write the scraper
+Web Scout discovers web API endpoints and DOM data structures for AI agents to write
+scrapers. Uses a real browser to render JS, capture XHR/Fetch requests, scan DOM,
+and output compressed field docs. NOT a scraper — does not forge requests, reverse
+wasm, or bypass encryption.
 
 RECOMMENDED WORKFLOW:
 
-  Fast Path (recommended — open → search → context):
-    1. scout_open(url)              → read page text, pick a visible keyword
-    2. scout_act("scroll")          → trigger lazy-load / feed APIs (recommendation, timeline)
-    3. scout_search(keyword)        → find which API has this keyword in its response body
-    4. scout_context(keyword)       → see exact field path (e.g. data.item[0].title = "...")
-    → If API hit: scout_inspect(n) → request params + response structure → scout_export(n)
+  Fast path (recommended):
+    scout_open(url) -> pick a keyword from text
+    scout_act("scroll") -> trigger feed/recommendation APIs
+    scout_search(keyword) -> find which API contains it
+    scout_context(keyword) -> see field path and value
+    scout_inspect(n) -> request params + response structure
+    scout_export(n) -> save raw JSON + field doc
 
-    This skips scan/apis enumeration; search+context pinpoint the exact API+field directly.
+  Full scan (when no keyword):
+    scout_open(url) -> scout_act("search", kw) -> scout_scan(mode="all")
+    -> scout_apis() -> scout_inspect(n) -> scout_export(n)
 
-  Full Scan (when you do not have a keyword yet):
-    1. scout_open(url)              → read rendered page text, identify keywords
-    2. scout_fetch()                → get full text + all links (JS-heavy SPA pages)
-    3. scout_act("search", kw)      → trigger search APIs with keywords from step 1-2
-    4. scout_scan(mode="all")       → capture ALL data: network APIs + SSR JSON + DOM containers
-    5. scout_apis()                 → see all endpoints; [SSR] tag = embedded data
-    6. scout_inspect(n)             → view request params + response structure
-    7. scout_export(n)              → save raw JSON + field documentation
+  SSR pages: scout_apis() returns 0 is normal, use scout_search + scout_scan(mode="dom")
 
-  Interactive Scenarios:
-   - scout_elements()               → see clickable elements and DOM containers
-   - scout_click(n)                 → click tabs, filters, pagination buttons
-   - scout_login()                  → wait for manual login in browser window
-   - scout_screenshot()             → capture visual reference of the current page
-   - scout_tabs() / scout_tab_switch(n) / scout_tab_close(n) → manage multi-tab browsing
+  Other tools:
+    scout_fetch() get full page text + links
+    scout_elements() list clickable elements and DOM containers
+    scout_click(n) click element by ID
+    scout_login() wait for manual login
+    scout_screenshot() capture page screenshot
+    scout_tabs() / scout_tab_switch(n) / scout_tab_close(n) manage tabs
+    scout_peek(url, path_contains="...") one-shot API discovery
+    scout_scan(mode="dom", keyword="...") keyword-targeted DOM scan
+    scout_export_all() batch export all APIs
+    scout_close() close browser and clear all data
 
-  Quick Utilities:
-   - scout_scan(mode="dom", keyword="...")    → keyword-targeted DOM scan
-   - scout_peek(url, path_contains="...")     → one-shot API discovery, no session
-
-  SSR Pages (static HTML):
-    Data is in HTML/DOM, not XHR. Use scout_search + scout_scan(mode="dom") instead.
-    scout_apis() will return 0 - that is expected.
-
-FETCH RULE: For JS-rendered pages (SPA, social media platforms, video sites), use scout_fetch() —
-it captures browser-rendered text that HTTP-based fetch tools cannot see. For static
-HTML pages, other fetch tools may suffice.
+FETCH RULE: JS-rendered pages need scout_fetch() for browser-rendered text. Static
+HTML pages can use other fetch tools.
 """)
 
 # Inject mcp into state so tool modules can register themselves
