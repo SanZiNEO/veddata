@@ -958,10 +958,21 @@ def scout_fetch(max_length: int = 5000, start_index: int = 0) -> str:
     import json as _json
 
     try:
-        title = _browser.tab.title or ""
-        url = _browser.tab.url or ""
-        text = _browser.tab.run_js("return document.body.innerText || ''") or ""
-        links_raw = _browser.tab.run_js("""
+        title = str(_browser.tab.title or "")
+        url = str(_browser.tab.url or "")
+    except Exception:
+        title, url = "", "about:blank"
+
+    try:
+        text = _browser.tab.run_js("return document.body.innerText || ''")
+        if not isinstance(text, str):
+            text = ""
+    except Exception:
+        text = ""
+
+    links = []
+    try:
+        raw = _browser.tab.run_js("""
         (function() {
             var links = document.querySelectorAll('a[href]');
             var arr = [];
@@ -974,10 +985,11 @@ def scout_fetch(max_length: int = 5000, start_index: int = 0) -> str:
             }
             return JSON.stringify(arr);
         })()
-        """) or "[]"
-        links = _json.loads(links_raw)
-    except Exception as e:
-        return f"Fetch failed: {e}"
+        """)
+        if raw and isinstance(raw, str):
+            links = _json.loads(raw)
+    except Exception:
+        links = []
 
     lines = [
         f"Title: {title}",
