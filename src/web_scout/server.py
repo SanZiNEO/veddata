@@ -149,6 +149,10 @@ def scout_analyze() -> str:
     import time
     time.sleep(3)
     api_count = _monitor.wait_new(timeout=3.0) if _monitor else 0
+    # 再 flush 一次，抓取延迟到达的 API（页面懒加载可能在 3s 后才触发）
+    if _monitor:
+        time.sleep(1)
+        api_count += _monitor.flush()
 
     embedded_count = _monitor.capture_embedded_json() if _monitor else 0
 
@@ -746,9 +750,7 @@ def scout_fetch_api(
 ) -> str:
     """Open a page, find the first JSON API matching path_contains, return full details.
 
-    One-step verification tool: opens browser, listens for APIs, matches by path
-    and method, returns inspect output + compressed field document.
-    Does NOT require calling scout_open first — self-contained.
+    Opens the URL in a new tab (uses existing browser session).
 
     Args:
         url: Target page URL.
@@ -759,67 +761,44 @@ def scout_fetch_api(
         API inspect details and field document, or list of captured APIs if no match.
     """
     import time
+    global _browser, _monitor
+
+    if not _browser:
+        _browser = BrowserSession()
 
     try:
-        browser = BrowserSession()
-        monitor = NetworkMonitor(browser.tab)
-        monitor.start()
-
-        browser.open(url)
+        _browser.open(url)
         time.sleep(3)
 
-        monitor.wait_new(timeout=5.0)
+        if not _monitor:
+            _monitor = NetworkMonitor(_browser.get_current_tab())
+            _monitor.start()
+        _monitor.wait_new(timeout=5.0)
 
-        if not monitor.api_records:
-            browser.close()
+        if not _monitor.api_records:
             return "No JSON API requests were captured on this page."
 
         if path_contains:
-            matches = [
-                r
-                for r in monitor.api_records
-                if path_contains.lower() in r["path"].lower()
-            ]
+            matches = [r for r in _monitor.api_records if path_contains.lower() in r["path"].lower()]
             if method:
                 matches = [r for r in matches if r["method"].upper() == method.upper()]
         else:
-            matches = monitor.api_records[:1]
+            matches = _monitor.api_records[:1]
 
         if not matches:
-            lines = [
-                f"No API matching path='{path_contains}'"
-                + (f" method={method}" if method else "")
-                + ".",
-                f"Captured {len(monitor.api_records)} APIs:",
-                "",
-                monitor.list_apis(),
-            ]
-            browser.close()
+            lines = [f"No API matching path='{path_contains}'"
+                     + (f" method={method}" if method else "") + ".",
+                     f"Captured {len(_monitor.api_records)} APIs:",
+                     "", _monitor.list_apis()]
             return "\n".join(lines)
 
         target = matches[0]
         exporter = Exporter()
-        inspect_text = monitor.get_api(target["id"])
+        inspect_text = _monitor.get_api(target["id"])
         compact_text = exporter.compact(target)
-
-        auto_close = os.environ.get("AUTO_CLOSE", "true") == "true"
-        if auto_close:
-            browser.close()
-
-        parts = [
-            f"=== Matched API #{target['id']} ===",
-            inspect_text,
-            "",
-            "=== Field Document ===",
-            compact_text,
-        ]
-        return "\n".join(parts)
+        return f"=== Matched API #{target['id']} ===\n{inspect_text}\n\n=== Field Document ===\n{compact_text}"
 
     except Exception as e:
-        try:
-            browser.close()
-        except Exception:
-            pass
         return f"scout_fetch_api failed: {e}"
 
 
@@ -827,9 +806,7 @@ def scout_fetch_api(
 def scout_inspect_dom(url: str, keyword: str) -> str:
     """Open a page and scan DOM for containers matching keyword.
 
-    One-step verification tool: opens browser, waits for DOM to stabilize,
-    runs scan_by_keyword, returns matched containers with fields.
-    Does NOT require calling scout_open first — self-contained.
+    Opens the URL in a new tab (uses existing browser session).
 
     Args:
         url: Target page URL.
@@ -839,26 +816,22 @@ def scout_inspect_dom(url: str, keyword: str) -> str:
         Container list with hit counts and sample values.
     """
     import time
+    global _browser, _dom
+
+    if not _browser:
+        _browser = BrowserSession()
 
     try:
-        browser = BrowserSession()
-        browser.open(url)
+        _browser.open(url)
         time.sleep(2)
 
-        dom = DOMScanner(browser.tab)
+        tab = _browser.get_current_tab()
+        dom = DOMScanner(tab)
         result = dom.scan_by_keyword(keyword)
-
-        auto_close = os.environ.get("AUTO_CLOSE", "true") == "true"
-        if auto_close:
-            browser.close()
 
         return result
 
     except Exception as e:
-        try:
-            browser.close()
-        except Exception:
-            pass
         return f"scout_inspect_dom failed: {e}"
 
 
