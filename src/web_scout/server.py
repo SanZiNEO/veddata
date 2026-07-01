@@ -10,7 +10,36 @@ from web_scout.dom import DOMScanner
 from web_scout.login import LoginDetector
 from web_scout.export import Exporter
 
-mcp = FastMCP("web-scout", instructions="AI-powered web API & DOM discovery tool")
+mcp = FastMCP("web-scout", instructions="""
+Web Scout is a DATA SOURCE DISCOVERY tool, not a scraper or browser automation tool.
+
+WHAT IT DOES:
+- Opens web pages in a real browser → extracts text + captures API requests + scans DOM structure
+- Outputs compressed field documentation for AI to write scrapers from
+- Detects login walls and guides users through manual login
+
+WHAT IT DOES NOT DO:
+- Execute JavaScript, modify request headers, or manage cookies
+- Scrape or download data — this is a reconnaissance tool
+- Replace Chrome DevTools snapshot — DevTools shows detailed element trees for humans;
+  Web Scout outputs compressed container summaries optimized for AI token consumption
+
+MODES:
+- text: open page → return full text Markdown (fastest, for any page)
+- api:  open page → capture JSON API endpoints (for SPA sites like Xiaohongshu/Bilibili)
+- dom:  open page → scan repeating DOM containers (for SSR sites like Douban/Amazon)
+- auto (default): try API first → fallback to DOM
+
+EXPECTED WORKFLOW:
+  1. scout_open(url) → read page text
+  2. scout_action("search", "keyword") → trigger API requests
+  3. scout_list_apis() → see captured endpoints
+  4. scout_inspect_api(n) → view request params + response structure
+  5. scout_export(n) → save raw JSON + field documentation
+
+For DOM-heavy pages: scout_list_elements() → find containers → scout_inspect_dom()
+For quick verification: scout_fetch_api(url, path) — open + capture + return in one call.
+""")
 
 _response_dir = os.environ.get("RESPONSE_DIR", "./response")
 if os.path.exists(_response_dir):
