@@ -1,4 +1,4 @@
-"""Web Scout MCP Server — Entry Point with 8 tools."""
+"""Web Scout MCP Server — Entry Point with 10 tools."""
 
 import os
 
@@ -24,18 +24,13 @@ WHAT IT DOES NOT DO:
 - Replace Chrome DevTools snapshot — DevTools shows detailed element trees for humans;
   Web Scout outputs compressed container summaries optimized for AI token consumption
 
-MODES:
-- text: open page → return full text Markdown (fastest, for any page)
-- api:  open page → capture JSON API endpoints (for SPA sites like Xiaohongshu/Bilibili)
-- dom:  open page → scan repeating DOM containers (for SSR sites like Douban/Amazon)
-- auto (default): try API first → fallback to DOM
-
 EXPECTED WORKFLOW:
-  1. scout_open(url) → read page text
-  2. scout_action("search", "keyword") → trigger API requests
-  3. scout_list_apis() → see captured endpoints
-  4. scout_inspect_api(n) → view request params + response structure
-  5. scout_export(n) → save raw JSON + field documentation
+  1. scout_open(url) → read page text first
+  2. AI reads text to decide if page is usable
+  3. scout_analyze() → capture APIs + scan DOM + extract embedded JSON (only when needed)
+  4. scout_list_apis() → see captured endpoints
+  5. scout_inspect_api(n) → view request params + response structure
+  6. scout_export(n) → save raw JSON + field documentation
 
 For DOM-heavy pages: scout_list_elements() → find containers → scout_inspect_dom()
 For quick verification: scout_fetch_api(url, path) — open + capture + return in one call.
@@ -52,24 +47,24 @@ _dom: DOMScanner | None = None
 _login: LoginDetector | None = None
 _exporter: Exporter | None = None
 
-_current_url: str = ""
-_current_mode: str = "auto"
 _login_pending: bool = False
 
 
 @mcp.tool()
-def scout_open(url: str, mode: str = "auto") -> str:
-    """Open a URL in Chromium, extract page text, start network monitoring.
+def scout_open(url: str) -> str:
+    """Open a URL in Chromium, extract full page text as Markdown.
+
+    Returns page title and full markdown text. No API monitoring or DOM
+    scanning is performed — call scout_analyze() after reading the text if
+    you need to inspect API endpoints or DOM containers.
 
     Args:
         url: Target website URL.
-        mode: "auto" | "api" | "dom" | "text"
 
     Returns:
-        Page info with markdown text and next-step suggestions.
+        Page title and full markdown text.
     """
-    global _browser, _monitor, _dom, _login, _exporter
-    global _current_url, _current_mode, _login_pending
+    global _browser, _monitor, _dom, _login, _exporter, _login_pending
 
     if _login_pending and _browser:
         login = LoginDetector(_browser.tab)
@@ -79,10 +74,15 @@ def scout_open(url: str, mode: str = "auto") -> str:
             return ("登录未完成，请在浏览器中手动登录，然后调用 scout_wait_login()。\n"
                     "如果要换目标页面，先调用 scout_close() 关闭当前会话。")
 
+    _monitor = None
+    _dom = None
+    _exporter = None
+
     if not _browser:
         _browser = BrowserSession()
-    _current_url = url
-    _current_mode = mode
+
+    _monitor = NetworkMonitor(_browser.tab)
+    _monitor.start()
 
     try:
         result = _browser.open(url)
@@ -99,48 +99,87 @@ def scout_open(url: str, mode: str = "auto") -> str:
                 f"⚠️ 此页面需要登录。登录后可获取完整 cookies 和更多 API 端点。\n"
                 f"请在浏览器中手动登录，然后调用 scout_wait_login() 继续。")
 
-    _monitor = NetworkMonitor(_browser.tab)
-    _monitor.start()
-
-    import time
-    time.sleep(3)
-    api_count = _monitor.wait_new(timeout=3.0)
-
-    _dom = DOMScanner(_browser.tab)
-
-    _exporter = Exporter()
-
     lines = [
         f"Page opened: {result['title'] or url}",
         "",
         "=== Page Text ===",
         result["text"],
-        "",
-        f"APIs loaded on page: {api_count}",
     ]
-
-    if mode == "api":
-        lines.append("→ Next: scout_action('search', 'keyword') to find data")
-    elif mode == "dom":
-        lines.append("→ Next: scout_list_elements() or scout_action('search', 'keyword')")
-    elif mode == "text":
-        lines.append("→ Text mode — full page text returned above.")
-
     return "\n".join(lines)
 
 
 @mcp.tool()
+def scout_analyze() -> str:
+    """Analyze the current page: capture API endpoints, scan DOM containers,
+    and extract embedded JSON data from window globals.
+
+    Call this AFTER reading the page text from scout_open(). This starts
+    network monitoring, waits for API responses, scans the DOM for
+    repeated containers, and extracts SSR-embedded JSON data.
+
+    Returns:
+        Count of APIs, DOM containers, and embedded data sources found.
+    """
+    global _monitor, _dom, _exporter, _browser
+
+    if not _browser:
+        return "Error: call scout_open first."
+
+    if _login_pending:
+        return "Error: call scout_wait_login() first."
+
+    import time
+    time.sleep(3)
+    api_count = _monitor.wait_new(timeout=3.0) if _monitor else 0
+
+    embedded_count = _monitor.capture_embedded_json() if _monitor else 0
+
+    _dom = DOMScanner(_browser.tab)
+    _exporter = Exporter()
+
+    containers = _dom.find_containers()
+    dom_count = len(_dom.containers_cache)
+
+    parts = [f"Analyze complete: {api_count} APIs, {dom_count} DOM containers, {embedded_count} embedded data sources."]
+    if api_count > 0 or embedded_count > 0:
+        parts.append("Use scout_list_apis() to list all captured endpoints.")
+    if dom_count > 0:
+        parts.append("Use scout_list_elements() to list interactive elements and containers.")
+    return "\n".join(parts)
+
+
+@mcp.tool()
 def scout_action(action: str, value: str | None = None) -> str:
-    """Execute an action on the page (search or scroll).
+    """Execute an action on the page: search or scroll.
+
+    SEARCH:
+      Finds a visible search input field, types the keyword, and presses Enter.
+      Useful for triggering search-related API requests on SPA sites.
+
+    SCROLL:
+      Scrolls the page to load more content or reveal new elements.
+      Supports these values:
+        - omitted / "bottom" : scroll to page bottom (trigger lazy-load APIs)
+        - "top"               : scroll to page top
+        - "down"              : scroll down one viewport height
+        - "up"                : scroll up one viewport height
+        - "300"               : scroll down exactly 300px
+        - "-200"              : scroll up exactly 200px
+
+    After executing, returns number of newly captured API endpoints and
+    DOM container changes. This is how you trigger infinite-scroll pagination
+    or dynamic content loading — scroll, then check scout_list_apis() for
+    new endpoints.
 
     Args:
         action: "search" or "scroll"
-        value: Search keyword (required for "search")
+        value:   For "search": the keyword to type into the search box.
+                 For "scroll": scroll target (see options above). Defaults to bottom.
 
     Returns:
-        Status message with count of new APIs captured.
+        Status message with count of new APIs and DOM changes.
     """
-    global _monitor, _browser
+    global _monitor, _browser, _dom
 
     if not _browser:
         return "Error: call scout_open first."
@@ -188,12 +227,62 @@ def scout_action(action: str, value: str | None = None) -> str:
 
     elif action == "scroll":
         try:
-            _browser.tab.scroll.to_bottom()
-            import time
+            api_before = len(_monitor.api_records) if _monitor else 0
+            dom_before = len(_dom.containers_cache) if _dom else 0
 
+            if value is None or value == "bottom":
+                _browser.tab.scroll.to_bottom()
+                desc = "bottom"
+            elif value == "top":
+                _browser.tab.scroll.to_top()
+                desc = "top"
+            elif value == "down":
+                vp_height = _browser.tab.run_js("return window.innerHeight")
+                _browser.tab.scroll.down(vp_height)
+                desc = f"down {vp_height}px (1 viewport)"
+            elif value == "up":
+                vp_height = _browser.tab.run_js("return window.innerHeight")
+                _browser.tab.scroll.up(vp_height)
+                desc = f"up {vp_height}px (1 viewport)"
+            elif value.lstrip("-").isdigit():
+                px = int(value)
+                if px >= 0:
+                    _browser.tab.scroll.down(px)
+                    desc = f"down {px}px"
+                else:
+                    _browser.tab.scroll.up(abs(px))
+                    desc = f"up {abs(px)}px"
+            else:
+                return f"Unsupported scroll value: '{value}'. Use 'top', 'bottom', 'down', 'up', or pixel number."
+
+            import time
             time.sleep(2)
-            new_count = _monitor.wait_new(timeout=3.0) if _monitor else 0
-            return f"Scrolled to bottom, captured {new_count} new APIs"
+
+            new_apis = _monitor.wait_new(timeout=3.0) if _monitor else 0
+
+            dom_new = 0
+            dom_total = 0
+            if _dom:
+                _dom.find_containers()
+                dom_total = len(_dom.containers_cache)
+                dom_new = max(0, dom_total - dom_before)
+
+            parts = [f"Scrolled to {desc}."]
+
+            if _monitor:
+                if new_apis > 0:
+                    parts.append(f"{new_apis} new APIs captured (total: {len(_monitor.api_records)}).")
+                else:
+                    parts.append(f"0 new APIs. Total: {len(_monitor.api_records)}.")
+
+            if _dom:
+                if dom_new > 0:
+                    parts.append(f"DOM: {dom_total} containers, {dom_new} new since last scan.")
+                else:
+                    parts.append(f"DOM: {dom_total} containers (no new).")
+
+            return " ".join(parts)
+
         except Exception as e:
             return f"Scroll failed: {e}"
     else:
@@ -210,7 +299,7 @@ def scout_wait_login(timeout: int = 300) -> str:
     Returns:
         Status message with refreshed page text.
     """
-    global _login_pending, _browser, _monitor, _login
+    global _login_pending, _browser, _login
 
     if not _browser or not _login:
         return "Error: call scout_open first."
@@ -219,24 +308,17 @@ def scout_wait_login(timeout: int = 300) -> str:
 
     if result:
         _login_pending = False
-        _monitor = NetworkMonitor(_browser.tab)
-        _monitor.start()
-        _dom = DOMScanner(_browser.tab)
-        _exporter = Exporter()
-        import time
-        time.sleep(3)
-        api_count = _monitor.wait_new(timeout=3.0)
         text = _browser.get_text()
-        return (f"登录成功！已刷新页面\n\n"
-                f"API: {api_count} 个\n\n"
-                f"页面文本:\n{text[:2000]}")
+        return (f"登录成功！\n\n"
+                f"页面文本:\n{text[:2000]}\n\n"
+                f"如果需要获取 API 端点，请调用 scout_analyze()。")
     else:
         return f"Login timeout ({timeout}s). Please try again."
 
 
 @mcp.tool()
 def scout_list_apis(keyword: str | None = None) -> str:
-    """List all captured JSON API endpoints, optionally filtered by keyword.
+    """List all captured API endpoints, optionally filtered by keyword.
 
     The keyword filter searches both the URL path and the full response body
     (recursively through all string fields).
@@ -249,31 +331,38 @@ def scout_list_apis(keyword: str | None = None) -> str:
         Numbered list of API endpoints with method, path, count, and field count.
     """
     if not _monitor:
-        return "Error: call scout_open first."
+        return "No APIs captured yet. Call scout_analyze() first after scout_open()."
 
     return _monitor.list_apis(keyword=keyword)
 
 
 @mcp.tool()
-def scout_inspect_api(index: int) -> str:
+def scout_inspect_api(index: int, detail: str = "preview") -> str:
     """Show full request and response details for a specific API.
 
     Args:
         index: API endpoint ID (from scout_list_apis output).
+        detail: "preview" (default) = truncated summary with key headers.
+                "full" = complete headers + full field structure tree.
 
     Returns:
         Formatted request/response details + compressed field document.
     """
+    global _monitor, _exporter
+
     if not _monitor:
-        return "Error: call scout_open first."
+        return "No APIs captured. Call scout_analyze() first after scout_open()."
 
     record = _monitor.get_record(index)
     if not record:
-        return _monitor.get_api(index)
+        return _monitor.get_api(index, detail)
 
-    inspect_text = _monitor.get_api(index)
-    compact_text = _exporter.compact(record) if _exporter else ""
-    
+    inspect_text = _monitor.get_api(index, detail)
+
+    if not _exporter:
+        _exporter = Exporter()
+    compact_text = _exporter.compact(record)
+
     parts = [inspect_text]
     if compact_text:
         parts.extend(["", "=== Field Document ===", compact_text])
@@ -288,7 +377,7 @@ def scout_list_elements() -> str:
         Numbered list of clickable elements and detected containers with fields.
     """
     if not _dom:
-        return "Error: call scout_open first."
+        return "No DOM data. Call scout_analyze() first after scout_open()."
 
     lines = [_dom.list_elements()]
 
@@ -303,16 +392,28 @@ def scout_list_elements() -> str:
 
 @mcp.tool()
 def scout_click(index: int) -> str:
-    """Click a page element by its index.
+    """Click a page element by its ID from scout_list_elements().
+
+    Typical workflow:
+      1. scout_list_elements() → see interactive elements with IDs
+      2. scout_click(n)           → click the n-th element
+      3. scout_list_apis()        → see new API endpoints triggered by the click
+
+    Common use cases:
+      - Click "next page" buttons to capture pagination API calls
+      - Click tabs/filters to load different data endpoints
+      - Click category links to explore different API responses
+
+    After clicking, waits 2 seconds and returns how many new APIs were captured.
 
     Args:
         index: Element ID from scout_list_elements output.
 
     Returns:
-        Status message with count of new APIs triggered.
+        Status message with element clicked and count of new APIs triggered.
     """
     if not _dom:
-        return "Error: call scout_open first."
+        return "No DOM data. Call scout_analyze() first after scout_open()."
 
     result = _dom.click_element(index)
 
@@ -340,7 +441,7 @@ def scout_search(keyword: str) -> str:
         API results or DOM keyword scan results.
     """
     if not _monitor or not _dom:
-        return "Error: call scout_open first."
+        return "No data. Call scout_analyze() first after scout_open()."
 
     result = _monitor.list_apis(keyword=keyword)
     if result and result != "No APIs captured yet.":
@@ -367,8 +468,11 @@ def scout_export(index: int, format: str = "both") -> str:
     """
     global _monitor, _exporter, _browser
 
-    if not _monitor or not _exporter:
-        return "Error: call scout_open first."
+    if not _monitor:
+        return "No data to export. Call scout_analyze() first after scout_open()."
+
+    if not _exporter:
+        _exporter = Exporter()
 
     record = _monitor.get_record(index)
     if not record:
@@ -383,6 +487,49 @@ def scout_export(index: int, format: str = "both") -> str:
             pass
 
     return result
+
+
+@mcp.tool()
+def scout_export_all(format: str = "both") -> str:
+    """Export all captured API data sources at once.
+
+    Iterates through every captured API endpoint and exports each one
+    to the response/ directory. Much faster than calling scout_export()
+    multiple times when you have many endpoints.
+
+    Args:
+        format: "raw" | "compact" | "both" (default "both").
+
+    Returns:
+        Summary of how many APIs were exported and the output directory.
+    """
+    global _monitor, _exporter
+
+    if not _monitor:
+        return "No data to export. Call scout_analyze() first after scout_open()."
+
+    if not _exporter:
+        _exporter = Exporter()
+
+    records = _monitor.api_records + _monitor.embedded_records
+    if not records:
+        return "No APIs captured yet."
+
+    results = []
+    for record in records:
+        try:
+            _exporter.export(record, format)
+            results.append(f"  [{record['id']}] {record['method']} {record['path']}  → exported")
+        except Exception as e:
+            results.append(f"  [{record['id']}] {record['method']} {record['path']}  → FAILED: {e}")
+
+    lines = [
+        f"Batch export complete: {len(results)} APIs exported.",
+        f"Output directory: {_exporter.response_dir}/",
+        "",
+    ]
+    lines.extend(results)
+    return "\n".join(lines)
 
 
 @mcp.tool()
@@ -508,13 +655,33 @@ def scout_inspect_dom(url: str, keyword: str) -> str:
 
 
 @mcp.tool()
-def scout_close() -> str:
-    """Close the current browser session and release resources.
+def scout_close(port: int | None = None) -> str:
+    """Close a browser session.
 
-    Use this when done with discovery/export, or before switching to a
-    different URL with a fresh scout_open call.
+    Without arguments: closes the current session tracked by scout_open.
+    With a port number: closes the browser on the specified port (9222-9231),
+    regardless of whether it's the "current" session.
+
+    Args:
+        port: Optional port number to close. If omitted, closes current session.
+
+    Returns:
+        Status message.
     """
     global _browser, _monitor, _dom, _login_pending
+
+    if port is not None:
+        if not 9222 <= port <= 9231:
+            return f"Port {port} out of range (9222-9231)."
+
+        from DrissionPage import Chromium, ChromiumOptions
+        try:
+            co = ChromiumOptions().set_address(f"127.0.0.1:{port}")
+            browser = Chromium(co)
+            browser.quit()
+            return f"Browser on port {port} closed."
+        except Exception as e:
+            return f"Port {port} is already free or could not be closed: {e}"
 
     if not _browser:
         return "No open browser session."
@@ -534,10 +701,19 @@ def scout_close() -> str:
 
 @mcp.tool()
 def scout_list_browsers() -> str:
-    """List all running browser instances on ports 9222-9231.
+    """List all running browser instances across ports 9222-9231.
 
-    Shows which ports have active browsers. AI can then decide
-    which ones to keep and call scout_close to clean up the rest.
+    Shows each port's status: active browser (with page title + URL) or free.
+    Useful for managing multiple concurrent browsing sessions and cleaning up
+    stale browser processes from previous runs.
+
+    Typical usage:
+      - Call this if scout_open() fails with port conflicts
+      - Call this when you suspect leftover browser processes are wasting resources
+      - After listing, call scout_close(port=N) to free up specific ports
+
+    Returns:
+        Per-port status list with page info for active instances.
     """
     from DrissionPage import Chromium, ChromiumOptions
 
@@ -552,12 +728,36 @@ def scout_list_browsers() -> str:
             url = tab.url[:60] if tab.url else "about:blank"
             lines.append(f"  [{port}] {title} — {url}")
             running += 1
+            browser.quit()
         except Exception:
             lines.append(f"  [{port}] (free)")
 
     lines.append(f"\n{running} active, {10 - running} free")
     return "\n".join(lines)
-    
+
+
+@mcp.tool()
+def scout_screenshot(name: str = "screenshot", full_page: bool = True) -> str:
+    """Take a screenshot of the current page.
+
+    Args:
+        name: Base filename (without extension). Default "screenshot".
+        full_page: True = entire page, False = visible viewport.
+
+    Returns:
+        File path of the saved screenshot.
+    """
+    global _browser
+
+    if not _browser:
+        return "Error: call scout_open first."
+
+    try:
+        path = _browser.tab.get_screenshot(name=f"{name}.png", full_page=full_page)
+        return f"Screenshot saved: {path}"
+    except Exception as e:
+        return f"Screenshot failed: {e}"
+
 
 def main():
     mcp.run()

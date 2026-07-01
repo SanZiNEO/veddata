@@ -4,6 +4,7 @@ import os
 import re
 
 from DrissionPage import Chromium, ChromiumOptions
+from trafilatura import extract as trafilatura_extract
 
 
 class BrowserSession:
@@ -41,28 +42,47 @@ class BrowserSession:
                 return
             except Exception:
                 continue
-        raise RuntimeError("No available browser port in 9222-9231")
+        raise RuntimeError(
+            "所有浏览器端口 (9222-9231) 均被占用。\n"
+            "请调用 scout_list_browsers() 查看占用情况，"
+            "然后使用 scout_close(port=N) 关闭空闲浏览器释放端口。"
+        )
 
     def open(self, url: str) -> dict:
         """Open URL and return page info.
 
         Returns:
-            dict with keys: title, text, api_count, is_login_required
+            dict with keys: title, text
         """
         self.tab.get(url)
+        try:
+            self.tab.wait.eles_loaded('a, button, input', timeout=5, any_one=True)
+        except Exception:
+            pass
         title = self.tab.title
         text = self.get_text()
-        is_login = self._detect_login(text)
-        return {
-            "title": title,
-            "text": text,
-            "api_count": self._estimate_api_count(),
-            "is_login_required": is_login,
-        }
+        return {"title": title, "text": text}
 
     def get_text(self) -> str:
-        """Extract page text as Markdown, stripped of chrome elements."""
+        """Extract page text as Markdown using trafilatura, fallback to regex."""
         html = self.tab.html
+        max_len = int(os.environ.get("MAX_TEXT_LENGTH", "3000"))
+
+        if os.environ.get("TEXT_EXTRACTOR", "") != "legacy":
+            try:
+                result = trafilatura_extract(
+                    html,
+                    output_format='markdown',
+                    include_tables=True,
+                    include_links=False,
+                    include_images=False,
+                    include_comments=False,
+                    favor_precision=True,
+                )
+                if result and len(result.strip()) > 20:
+                    return result[:max_len]
+            except Exception:
+                pass
 
         html = re.sub(
             r'<script[^>]*>.*?</script>',
@@ -123,7 +143,6 @@ class BrowserSession:
             prev = stripped
         text = "\n".join(deduped)
 
-        max_len = int(os.environ.get("MAX_TEXT_LENGTH", "3000"))
         return text[:max_len]
 
     def close(self):
@@ -133,22 +152,4 @@ class BrowserSession:
         except Exception:
             pass
 
-    def _detect_login(self, text: str) -> bool:
-        """Detect if the current page requires login by checking URL and text."""
-        url = self.tab.url.lower()
-        if any(p in url for p in ("/login", "/signin", "/auth")):
-            return True
-
-        text_lower = text.lower()
-        if text_lower.count("请登录") >= 2:
-            return True
-        if "立即登录" in text_lower:
-            return True
-        if "扫码登录" in text_lower:
-            return True
-        return False
-
-    @staticmethod
-    def _estimate_api_count() -> int:
-        """Placeholder: real API count comes from NetworkMonitor."""
-        return 0
+    

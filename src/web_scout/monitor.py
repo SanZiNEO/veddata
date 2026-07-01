@@ -43,14 +43,17 @@ def _extract_path(url: str) -> str:
 class NetworkMonitor:
     """Intercept browser network requests, filter JSON APIs, deduplicate and query."""
 
+    ALLOWED_RESOURCE_TYPES = frozenset({"XHR", "Fetch", "Script", "Document", "EventSource"})
+
     def __init__(self, tab):
         self.tab = tab
         self.api_records: list[dict] = []
+        self.embedded_records: list[dict] = []
         self._next_id = 1
 
     def start(self):
-        """Begin listening to all network requests."""
-        self.tab.listen.start()
+        """Begin listening to all network requests (all resource types)."""
+        self.tab.listen.start(res_type=True)
 
     def stop(self):
         """Stop listening. Clears the queue but does not affect stored records."""
@@ -86,18 +89,27 @@ class NetworkMonitor:
         if packet.is_failed:
             return False
 
-        resp_headers = packet.response.headers
-        content_type = resp_headers.get("content-type", "")
-        if "application/json" not in content_type:
+        resource_type = getattr(packet, 'resourceType', 'Other')
+        if resource_type not in self.ALLOWED_RESOURCE_TYPES:
             return False
+
+        resp_headers = packet.response.headers
+        content_type = resp_headers.get("content-type", "").lower()
 
         body = packet.response.body
         if isinstance(body, str):
             try:
                 body = json.loads(body)
             except (json.JSONDecodeError, ValueError):
-                return False
-        elif not isinstance(body, dict):
+                if "application/json" not in content_type:
+                    body = self._try_parse_jsonp(body)
+                    if body is None:
+                        return False
+            else:
+                pass
+        elif isinstance(body, (dict, list)):
+            pass
+        else:
             return False
 
         url = packet.url
@@ -122,7 +134,9 @@ class NetworkMonitor:
                 post_data = raw
 
         status = packet.response.status
-        field_count = _leaf_count(body)
+        field_count = _leaf_count(body) if isinstance(body, (dict, list)) else 0
+        response_url = getattr(packet.response, 'url', url)
+        response_headers = dict(resp_headers)
 
         existing = None
         for rec in self.api_records:
@@ -138,6 +152,9 @@ class NetworkMonitor:
             existing["response_status"] = status
             existing["response_body"] = body
             existing["field_count"] = field_count
+            existing["resource_type"] = resource_type
+            existing["response_url"] = response_url
+            existing["response_headers"] = response_headers
         else:
             self.api_records.append(
                 {
@@ -152,6 +169,9 @@ class NetworkMonitor:
                     "response_status": status,
                     "response_body": body,
                     "field_count": field_count,
+                    "resource_type": resource_type,
+                    "response_url": response_url,
+                    "response_headers": response_headers,
                 }
             )
             self._next_id += 1
@@ -168,11 +188,11 @@ class NetworkMonitor:
         Returns:
             Multi-line string listing API endpoints with ID, method, path, count, fields.
         """
-        records = self.api_records
+        all_records = self.api_records + self.embedded_records
         if keyword:
             kw = keyword.lower()
             filtered = []
-            for r in records:
+            for r in all_records:
                 if kw in r["path"].lower():
                     filtered.append(r)
                     continue
@@ -180,35 +200,44 @@ class NetworkMonitor:
                 if kw in body_str.lower():
                     filtered.append(r)
                     continue
-            records = filtered
+            all_records = filtered
 
-        if not records:
+        if not all_records:
             return "No APIs captured yet."
 
         lines = []
-        for rec in records:
+        for rec in all_records:
             method = rec["method"]
             path = rec["path"]
             count = rec["count"]
             fields = rec["field_count"]
-            lines.append(f"[{rec['id']}] {method} {path}  {count} {'times' if count > 1 else 'time'} → {fields} fields")
+            rtype = rec.get("resource_type", "XHR")
+            source = rec.get("source", "")
+
+            tag_parts = []
+            if source == "embedded":
+                tag_parts.append("[SSR]")
+            elif rtype == "Script":
+                tag_parts.append("[JSONP]")
+            elif rtype == "EventSource":
+                tag_parts.append("[SSE]")
+            tag = " ".join(tag_parts) + " " if tag_parts else ""
+
+            lines.append(f"[{rec['id']}] {tag}{method} {path}  {count} {'times' if count > 1 else 'time'} → {fields} fields")
         return "\n".join(lines)
 
-    def get_api(self, api_id: int) -> str:
+    def get_api(self, api_id: int, detail: str = "preview") -> str:
         """Return detailed request/response for a specific API endpoint.
 
         Args:
             api_id: Numeric ID of the API (1-based, from list_apis output).
+            detail: "preview" (default) = truncated summary.
+                    "full" = complete headers + full field structure.
 
         Returns:
             Formatted text with full request and response details.
         """
-        record = None
-        for rec in self.api_records:
-            if rec["id"] == api_id:
-                record = rec
-                break
-
+        record = self.get_record(api_id)
         if not record:
             return f"API #{api_id} not found."
 
@@ -218,13 +247,20 @@ class NetworkMonitor:
         lines.append(f"Method: {record['method']}")
 
         headers = record.get("request_headers", {})
-        lines.append("Headers:")
-        for key in ("Content-Type", "Referer", "Cookie", "User-Agent", "Origin", "X-Requested-With"):
-            val = headers.get(key)
-            if val is not None:
-                if key == "Cookie":
-                    val = _truncate_cookie(str(val))
-                lines.append(f"  {key}: {val}")
+        if detail == "full":
+            lines.append("Headers (all):")
+            for k, v in headers.items():
+                if k.lower() == "cookie":
+                    v = _truncate_cookie(str(v))
+                lines.append(f"  {k}: {v}")
+        else:
+            lines.append("Headers:")
+            for key in ("Content-Type", "Referer", "Cookie", "User-Agent", "Origin", "X-Requested-With"):
+                val = headers.get(key)
+                if val is not None:
+                    if key == "Cookie":
+                        val = _truncate_cookie(str(val))
+                    lines.append(f"  {key}: {val}")
 
         params = record.get("request_params")
         if params:
@@ -244,8 +280,35 @@ class NetworkMonitor:
         lines.append(f"Status: {record.get('response_status', '?')}")
 
         resp_body = record.get("response_body", {})
-        text = json.dumps(resp_body, indent=2, ensure_ascii=False)
-        lines.append(f"Body (truncated):\n{_truncate_body(text)}")
+
+        if detail == "full":
+            lines.append("Field structure:")
+            lines.append(self._format_field_structure(resp_body))
+
+            resp_headers = record.get("response_headers", {})
+            if resp_headers:
+                lines.append("")
+                lines.append("=== Response Headers ===")
+                for k, v in resp_headers.items():
+                    if k.lower() == "set-cookie":
+                        v = _truncate_cookie(str(v)[:50])
+                    lines.append(f"  {k}: {v}")
+
+            request_url = record.get("url", "")
+            response_url = record.get("response_url", "")
+            if response_url and response_url != request_url:
+                status = record.get("response_status", "?")
+                lines.append("")
+                lines.append("=== Redirect ===")
+                lines.append(f"Request:  {request_url}")
+                lines.append(f"Status:   {status}")
+                lines.append(f"Response: {response_url}")
+                location = resp_headers.get("Location", "")
+                if location:
+                    lines.append(f"Location: {location}")
+        else:
+            text = json.dumps(resp_body, indent=2, ensure_ascii=False)
+            lines.append(f"Body (truncated):\n{_truncate_body(text)}")
 
         return "\n".join(lines)
 
@@ -261,4 +324,133 @@ class NetworkMonitor:
         for rec in self.api_records:
             if rec["id"] == api_id:
                 return rec
+        for rec in self.embedded_records:
+            if rec["id"] == api_id:
+                return rec
         return None
+
+    @staticmethod
+    def _try_parse_jsonp(text: str) -> dict | None:
+        """Try to extract JSON from JSONP callback wrapper like `callback({...})`."""
+        import re
+        m = re.match(r'^[a-zA-Z_$][\w$]*\s*\((.+)\)\s*;?\s*$', text.strip())
+        if m:
+            try:
+                inner = m.group(1)
+                return json.loads(inner)
+            except (json.JSONDecodeError, ValueError):
+                pass
+        return None
+
+    def capture_embedded_json(self) -> int:
+        """Extract embedded JSON from window globals and <script type=application/json>."""
+        self.embedded_records.clear()
+
+        js = """
+        (function() {
+            var targets = [
+                '__INITIAL_STATE__', '__NEXT_DATA__', '__NUXT__',
+                '__PRELOADED_STATE__', '__APP_DATA__', '__RENDER_DATA__',
+                '__ASYNC_DATA__'
+            ];
+            var results = {};
+            for (var i = 0; i < targets.length; i++) {
+                var key = targets[i];
+                try {
+                    var val = window[key];
+                    if (val !== undefined && val !== null) {
+                        results[key] = val;
+                    }
+                } catch(e) {}
+            }
+            var scripts = document.querySelectorAll(
+                'script[type="application/json"], script[type="application/ld+json"]'
+            );
+            for (var j = 0; j < scripts.length; j++) {
+                var s = scripts[j];
+                var id = s.id || ('script_json_' + j);
+                try {
+                    results[id] = JSON.parse(s.textContent);
+                } catch(e) {}
+            }
+            return JSON.stringify(results);
+        })()
+        """
+        try:
+            raw = self.tab.run_js(js)
+            if not raw:
+                return 0
+            data = json.loads(raw)
+        except (json.JSONDecodeError, Exception):
+            return 0
+
+        if not isinstance(data, dict):
+            return 0
+
+        for key, value in data.items():
+            if value is None:
+                continue
+            if isinstance(value, str):
+                try:
+                    value = json.loads(value)
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            field_count = _leaf_count(value) if isinstance(value, (dict, list)) else 0
+            self.embedded_records.append({
+                "id": self._next_id,
+                "source": "embedded",
+                "key": key,
+                "url": self.tab.url,
+                "method": "SSR",
+                "path": f"window.{key}",
+                "count": 1,
+                "request_headers": {},
+                "request_params": {},
+                "request_body": None,
+                "response_status": 200,
+                "response_body": value,
+                "field_count": field_count,
+                "resource_type": "Document",
+                "response_url": self.tab.url,
+                "response_headers": {},
+            })
+            self._next_id += 1
+
+        return len(self.embedded_records)
+
+    def _format_field_structure(self, obj, max_array_items: int = 3) -> str:
+        """Format a JSON structure showing field names, types, and sample values."""
+        lines = []
+
+        def _walk(o, prefix: str = "", depth: int = 0):
+            if depth > 6:
+                return
+            indent = "  " * depth
+
+            if isinstance(o, dict):
+                for k, v in o.items():
+                    full_key = f"{prefix}.{k}" if prefix else k
+                    if isinstance(v, dict):
+                        lines.append(f"{indent}{full_key}: {{object}} — {len(v)} keys")
+                        if depth < 3:
+                            _walk(v, full_key, depth + 1)
+                    elif isinstance(v, list):
+                        count = len(v)
+                        if count > 0 and isinstance(v[0], dict):
+                            lines.append(f"{indent}{full_key}: [{count}] — first item fields:")
+                            _walk(v[0], "", depth + 1)
+                        elif count > 0:
+                            sample = str(v[:max_array_items])[:60]
+                            lines.append(f"{indent}{full_key}: [{count}] — sample: {sample}")
+                        else:
+                            lines.append(f"{indent}{full_key}: [] (empty)")
+                    else:
+                        t = type(v).__name__
+                        s = str(v)[:50]
+                        lines.append(f"{indent}{full_key}: {t} = {s}")
+            elif isinstance(o, list) and len(o) > 0 and isinstance(o[0], dict):
+                lines.append(f"{indent}{prefix}: [{len(o)}] — first item fields:")
+                _walk(o[0], "", depth + 1)
+
+        _walk(obj)
+        return "\n".join(lines)
