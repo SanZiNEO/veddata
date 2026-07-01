@@ -487,26 +487,53 @@ def scout_click(index: int) -> str:
 
 @mcp.tool()
 def scout_search(keyword: str) -> str:
-    """Search for data by keyword: try APIs first, fall back to DOM scan.
+    """Search for data by keyword across ALL captured network data.
 
-    Searches the captured API response bodies for the keyword. Returns
-    a numbered list of matching API endpoints. Use scout_context() to
-    see WHERE in the data the keyword was found, with field paths and values.
+    Like browser DevTools Network Search: searches ALL response bodies
+    (JSON APIs, SSR embedded JSON, page HTML source, DOM text).
 
     Args:
         keyword: Search term.
 
     Returns:
-        Numbered list of matching API endpoints, or DOM scan results.
+        Numbered list of matching data sources.
     """
-    if not _monitor or not _dom:
+    import json as _json
+
+    if not _monitor:
         return "No data. Call scout_analyze() first after scout_open()."
 
-    result = _monitor.list_apis(keyword=keyword)
-    if result and result != "No APIs captured yet.":
-        return result
+    lines = []
+    # 1. JSON API 记录
+    api_result = _monitor.list_apis(keyword=keyword)
+    if api_result and api_result != "No APIs captured yet.":
+        lines.append("=== API Matches ===")
+        lines.append(api_result)
+        lines.append("")
 
-    return "No matches in captured APIs. Try scout_context() to search page text and DOM."
+    # 2. 页面 HTML 源码（包含 __INITIAL_STATE__ 等）
+    if _browser:
+        html = _browser.tab.html
+        if keyword.lower() in html.lower():
+            lines.append(f"=== Page HTML matched === (contains '{keyword}' in source)")
+            lines.append(f"URL: {_browser.tab.url}")
+            lines.append("Use scout_context() to see WHERE in the page source.")
+
+    # 3. DOM 扫描
+    if _dom:
+        dom_result = _dom.scan_by_keyword(keyword)
+        if dom_result and "No elements" not in dom_result:
+            lines.append("")
+            lines.append("=== DOM Matches ===")
+            lines.append(dom_result)
+
+    if not lines:
+        return f"No matches for '{keyword}' in any data source."
+
+    lines.insert(0, f'Search results for "{keyword}":')
+    lines.append("")
+    lines.append("Use scout_context() to see field paths and values for each match.")
+    return "\n".join(lines)
 
 
 @mcp.tool()
@@ -539,8 +566,11 @@ def scout_context(keyword: str) -> str:
         if dom_result and "No elements" not in dom_result:
             results.append({"source": "[DOM]", "field": "", "value": dom_result})
 
-    # Page meta 搜索
+    # Page meta + HTML 源码搜索
     if _browser:
+        html = _browser.tab.html
+        kw_lower = keyword.lower()
+        # meta 标签
         js = """
         var kw = arguments[0].toLowerCase();
         var results = [];
@@ -563,6 +593,21 @@ def scout_context(keyword: str) -> str:
                 results.append({"source": f"[Page] {m['tag']}", "field": "", "value": m["value"]})
         except Exception:
             pass
+
+        # HTML 源码全文搜索（抓取 __INITIAL_STATE__ 等嵌入在 <script> 中的数据）
+        if kw_lower in html.lower():
+            # 提取关键词附近 200 字符上下文
+            import re as _re
+            pos = html.lower().index(kw_lower)
+            start = max(0, pos - 100)
+            end = min(len(html), pos + len(keyword) + 100)
+            snippet = html[start:end].replace('\n', ' ').replace('\r', '')[:250]
+            tag = "HTML source"
+            if '__INITIAL_STATE__' in html[max(0, pos-200):pos]:
+                tag = "HTML source (inside __INITIAL_STATE__)"
+            elif '<meta' in html[max(0, pos-200):pos]:
+                tag = "HTML source (meta tag)"
+            results.append({"source": f"[Page] {tag}", "field": "tab.html", "value": f"...{snippet}..."})
 
     if not results:
         return f"No matches found for '{keyword}' in any data source."
