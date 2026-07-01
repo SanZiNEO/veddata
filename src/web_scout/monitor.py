@@ -413,18 +413,15 @@ class NetworkMonitor:
         js = """
         (function() {
             var results = {};
-            // 按命名规律通配扫描 window 全局变量
-            var keys = Object.keys(window);
-            var pattern = /(STATE|DATA|INITIAL|PRELOAD|STORE|APP|NUXT|CONFIG)/i;
-            for (var i = 0; i < keys.length; i++) {
-                var key = keys[i];
-                if (key.length > 40) continue;
-                if (!pattern.test(key)) continue;
+            // 直接尝试已知 SSR 变量名（不依赖 Object.keys 枚举）
+            var known = ['__INITIAL_STATE__', '__NEXT_DATA__', '__NUXT__',
+                         '__PRELOADED_STATE__', '__APP_DATA__', '__RENDER_DATA__',
+                         '__ASYNC_DATA__', '__REDUX_STATE__', '__APOLLO_STATE__'];
+            for (var k = 0; k < known.length; k++) {
                 try {
-                    var val = window[key];
-                    if (val && typeof val === 'object' && !Array.isArray(val)) {
-                        var size = Object.keys(val).length;
-                        if (size >= 2) results[key] = val;
+                    var v = window[known[k]];
+                    if (v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length >= 2) {
+                        results[known[k]] = v;
                     }
                 } catch(e) {}
             }
@@ -432,15 +429,11 @@ class NetworkMonitor:
             var scripts = document.getElementsByTagName('script');
             for (var j = 0; j < scripts.length; j++) {
                 var s = scripts[j];
-                var t = (s.type || '').toLowerCase();
-                if (t && t.indexOf('javascript') !== -1 && t.indexOf('json') === -1) continue;
                 var text = s.textContent.trim();
                 if (!text || text.length < 20 || text.length > 200000) continue;
-                // 快速排除 JS 代码: JSON 以 { 或 [ 开头
                 var firstChar = text.charAt(0);
                 if (firstChar !== '{' && firstChar !== '[') continue;
-                var id = s.id || ('script_' + j);
-                try { var parsed = JSON.parse(text); results[id] = parsed; } catch(e) {}
+                try { var parsed = JSON.parse(text); var id = s.id || ('script_' + j); results[id] = parsed; } catch(e) {}
             }
             return JSON.stringify(results);
         })()

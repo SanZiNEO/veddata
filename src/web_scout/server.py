@@ -47,15 +47,33 @@ _exporter: Exporter | None = None
 _login_pending: bool = False
 
 # 端口状态跟踪（内存中，不连接浏览器进程）
-_port_tracker: dict[int, dict] = {}  # port -> {url, tool}
+import time as _time
+_port_tracker: dict[int, dict] = {}  # port -> {url, tool, page, last_action, at}
+
+
+def _port_update(port: int, **kwargs) -> None:
+    """Update port state with arbitrary fields."""
+    if port not in _port_tracker:
+        _port_tracker[port] = {}
+    _port_tracker[port].update(kwargs)
+    _port_tracker[port]["at"] = _time.time()
 
 
 def _port_take(port: int, url: str) -> None:
-    _port_tracker[port] = {"url": url, "tool": "scout_open"}
+    _port_tracker[port] = {"url": url, "page": "", "last_tool": "scout_open", "at": _time.time()}
 
 
 def _port_release(port: int) -> None:
     _port_tracker.pop(port, None)
+
+
+def _bump(port: int, tool: str, detail: str = "") -> None:
+    """Mark that a tool was called on a port."""
+    if port in _port_tracker:
+        _port_tracker[port]["last_tool"] = tool
+        if detail:
+            _port_tracker[port]["detail"] = detail
+        _port_tracker[port]["at"] = _time.time()
 
 
 @mcp.tool()
@@ -91,6 +109,7 @@ def scout_open(url: str) -> str:
 
     if _browser.port is not None:
         _port_take(_browser.port, url)
+        _bump(_browser.port, "scout_open", url)
 
     _monitor = NetworkMonitor(_browser.tab)
     _monitor.start()
@@ -165,6 +184,10 @@ def scout_analyze() -> str:
         parts.append("Use scout_list_apis() to list all captured endpoints.")
     if dom_count > 0:
         parts.append("Use scout_list_elements() to list interactive elements and containers.")
+
+    if _browser and _browser.port is not None:
+        _bump(_browser.port, "scout_analyze", f"{api_count}a/{embedded_count}s/{dom_count}d")
+
     return "\n".join(parts)
 
 
@@ -304,6 +327,9 @@ def scout_action(action: str, value: str | None = None) -> str:
                 else:
                     parts.append(f"DOM: {dom_total} containers (no new).")
 
+            if _browser and _browser.port is not None:
+                _bump(_browser.port, "scroll", desc)
+
             return "\n".join(parts)
 
         except Exception as e:
@@ -340,6 +366,8 @@ def scout_wait_login(timeout: int = 300) -> str:
     if result:
         _login_pending = False
         text = _browser.get_text()
+        if _browser and _browser.port is not None:
+            _bump(_browser.port, "login_ok")
         return (f"登录成功！\n\n"
                 f"页面文本:\n{text[:2000]}\n\n"
                 f"如果需要获取 API 端点，请调用 scout_analyze()。")
@@ -808,18 +836,25 @@ def scout_list_browsers() -> str:
     Returns:
         Per-port status list showing active sessions vs free ports.
     """
-    lines = ["Browser port status (in-process tracking):"]
+    use_multi = os.environ.get("MULTI_BROWSER", "false") == "true"
+    port_range = range(9222, 9232) if use_multi else range(9222, 9223)
+
+    lines = ["Browser port status:"]
     running = 0
-    for port in range(9222, 9232):
+    for port in port_range:
         info = _port_tracker.get(port)
         if info:
-            url = info.get("url", "")[:60] if info.get("url") else "about:blank"
-            lines.append(f"  [{port}] active — {url}")
+            url = (info.get("url") or "")[:60]
+            tool = info.get("last_tool", "?")
+            detail = info.get("detail", "")
+            lines.append(f"  [{port}] {tool} — {url}")
+            if detail:
+                lines.append(f"         {detail}")
             running += 1
         else:
             lines.append(f"  [{port}] free")
 
-    lines.append(f"\n{running} active, {10 - running} free")
+    lines.append(f"\n{running} active, {len(port_range) - running} free")
     return "\n".join(lines)
 
 

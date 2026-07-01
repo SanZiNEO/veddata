@@ -28,7 +28,11 @@ class BrowserSession:
             self.tab = self._browser.latest_tab
             return
 
-        for port in range(9222, 9232):
+        # 默认单端口模式; 设置 MULTI_BROWSER=true 使用 10 端口池
+        use_multi = os.environ.get("MULTI_BROWSER", "false") == "true"
+        port_range = range(9222, 9232) if use_multi else range(9222, 9223)
+
+        for port in port_range:
             try:
                 co = ChromiumOptions().set_local_port(port)
                 if headless:
