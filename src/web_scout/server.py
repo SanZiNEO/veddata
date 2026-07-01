@@ -254,8 +254,7 @@ def scout_action(action: str, value: str | None = None, container: str | None = 
 
                 if input_el:
                     input_el.clear()
-                    input_el.input(value)
-                    _browser.tab.actions.press_keys("Enter")
+                    input_el.input(value + '\n')
                 else:
                     return "No visible search input found. Use scout_list_elements to select manually."
             else:
