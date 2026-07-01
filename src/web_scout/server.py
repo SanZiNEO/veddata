@@ -11,37 +11,58 @@ from web_scout.login import LoginDetector
 from web_scout.export import Exporter
 
 mcp = FastMCP("web-scout", instructions="""
-Web Scout is a DATA SOURCE DISCOVERY tool, not a scraper or browser automation tool.
+Web Scout is a DATA SOURCE DISCOVERY tool for AI agents. It uses a real Chromium
+browser to open web pages, extract rendered text, capture API requests, and scan
+DOM structure — then outputs compressed field documentation so you can write
+scrapers. It is NOT a scraper or browser automation tool on its own.
 
 WHAT IT DOES:
-- Opens web pages in a real browser → extracts text + captures API requests + scans DOM structure
-- Outputs compressed field documentation for AI to write scrapers from
-- Detects login walls and guides users through manual login
+- Opens pages in a real Chromium browser (DrissionPage) → renders JS, extracts text
+- Captures XHR/Fetch network requests and SSR-embedded JSON (__INITIAL_STATE__, etc.)
+- Scans DOM for repeated data containers with CSS selectors and sample values
+- Triggers searches, scrolls, and clicks to discover pagination/feed APIs
+- Outputs compressed field documents (token-efficient) + saves raw JSON to disk
+- Detects login walls and guides users through manual login with CAPTCHA handling
 
 WHAT IT DOES NOT DO:
-- Execute JavaScript, modify request headers, or manage cookies
-- Scrape or download data — this is a reconnaissance tool
-- Replace Chrome DevTools snapshot — DevTools shows detailed element trees for humans;
-  Web Scout outputs compressed container summaries optimized for AI token consumption
+- Decrypt JS-obfuscated data, reverse wasm, or bypass signature algorithms
+- Modify request headers, manage cookies, or forge requests
+- Execute as a standalone scraper — it discovers data sources, you write the scraper
 
-EXPECTED WORKFLOW:
-  1. scout_open(url) → read page text first
-  2. scout_fetch() → get full rendered text + links (for SPA/JS-heavy pages)
-  3. scout_analyze() → capture ALL data: network APIs, SSR embedded JSON, DOM containers
-  4. scout_list_apis() → see all endpoints; [SSR] tag = embedded data
-  5. scout_inspect_api(n) → view params + response structure
-  6. scout_inspect_api(n, "full") → see complete nested field tree
-  7. scout_search(keyword) → find which API has your keyword
-  8. scout_context(keyword) → see field paths and values for matches
-  9. scout_export(n) → save raw JSON + field documentation
+RECOMMENDED WORKFLOW:
 
-FETCH PRIORITY: Always use scout_fetch() for browser-rendered pages (B站/小红书/知乎/SPA).
-It captures ALL visible text including JS-rendered content. Other fetch MCP tools
-use HTTP requests that cannot render JavaScript. Only use other fetch tools if
-the page is confirmed to be static HTML without JS dependency.
+  Phase 1 — Explore:
+    1. scout_open(url)           → read rendered page text, identify keywords
+    2. scout_fetch()              → get full text + all links (for JS-heavy / SPA pages)
+    3. scout_action("search", kw) → trigger search APIs with keywords from step 1-2
+    4. scout_action("scroll")     → trigger lazy-load / infinite-scroll APIs
 
-TAB MANAGEMENT: scout_list_tabs() shows all open tabs with numbers.
-scout_close(tab=N) closes a specific tab. Each return value includes [Tab #N].
+  Phase 2 — Analyze:
+    5. scout_analyze()            → capture ALL data: network APIs + SSR JSON + DOM containers
+    6. scout_list_apis()          → see all endpoints; [SSR] tag = embedded data
+    7. scout_search(keyword)      → find which API/SSR/DOM has your target data
+    8. scout_context(keyword)     → see exact field paths and sample values for matches
+
+  Phase 3 — Inspect & Export:
+    9. scout_inspect_api(n)       → view request params + response structure
+   10. scout_inspect_api(n,"full")→ see complete nested field tree
+   11. scout_export(n)            → save raw JSON + field documentation
+   12. scout_export_all()         → batch-export all captured APIs at once
+
+  Interactive Scenarios:
+   - scout_list_elements()        → see clickable elements and DOM containers
+   - scout_click(n)               → click tabs, filters, pagination buttons
+   - scout_wait_login()           → wait for manual login in browser window
+   - scout_screenshot()           → capture visual reference of the current page
+   - scout_list_tabs() / scout_close(n) → manage multi-tab browsing sessions
+
+FETCH RULE: For JS-rendered pages (B站/小红书/知乎/SPA), use scout_fetch() — it
+captures browser-rendered text that HTTP-based fetch tools cannot see. For static
+HTML pages, other fetch tools may suffice.
+
+MODE HINTS:
+  - Quick peek: scout_inspect_dom(url, keyword) — one-shot DOM scan, no session
+  - Quick verify: scout_fetch_api(url, path_contains) — open + listen + match API, one-shot
 """)
 
 _response_dir = os.environ.get("RESPONSE_DIR", "./response")
@@ -62,9 +83,10 @@ _login_pending: bool = False
 def scout_open(url: str) -> str:
     """Open a URL in Chromium, extract full page text as Markdown.
 
-    Returns page title and full markdown text. No API monitoring or DOM
-    scanning is performed — call scout_analyze() after reading the text if
-    you need to inspect API endpoints or DOM containers.
+    Starts network monitoring and captures initial API requests automatically.
+    After open, use scout_search(keyword) with keywords from the page text to
+    locate data sources. No need to call scout_analyze() unless you want
+    DOM container information.
 
     Args:
         url: Target website URL.
@@ -82,7 +104,6 @@ def scout_open(url: str) -> str:
             return ("登录未完成，请在浏览器中手动登录，然后调用 scout_wait_login()。\n"
                     "如果要换目标页面，先调用 scout_close() 关闭当前会话。")
 
-    _monitor = None
     _dom = None
     _exporter = None
 
@@ -96,6 +117,10 @@ def scout_open(url: str) -> str:
         result = _browser.open(url)
     except Exception as e:
         return f"Failed to open page: {e}"
+
+    import time as _time
+    _time.sleep(3)
+    _monitor.step(timeout=8.0)
 
     _login = LoginDetector(_browser.get_current_tab())
     if _login.is_login_required():
@@ -118,25 +143,26 @@ def scout_open(url: str) -> str:
 
 @mcp.tool()
 def scout_analyze() -> str:
-    """Analyze the current page: capture API endpoints, scan DOM containers,
-    and extract SSR-embedded JSON data from window globals and script tags.
+    """Scan the current page for DOM containers and SSR-embedded JSON.
 
-    THIS IS THE PRIMARY DATA DISCOVERY TOOL. Always call it after scout_open().
+    Supplementary to scout_search() — use this when you need to discover
+    repeated DOM structures (e.g. card layouts, list items) or extract
+    server-side rendered JSON (window.__INITIAL_STATE__, __NEXT_DATA__).
+
     It detects three types of data sources:
 
-    1. NETWORK APIs: XHR/Fetch requests captured by the browser listener.
+    1. NETWORK APIs: XHR/Fetch requests already captured by the listener.
        Show as regular entries in list_apis (e.g. "GET /api/feed/rcmd").
     
     2. SSR EMBEDDED JSON: window.__INITIAL_STATE__, __NEXT_DATA__, __NUXT__,
        <script type="application/json">, <script type="application/ld+json">.
        Show as [SSR] entries in list_apis (e.g. "[SSR] window.__INITIAL_STATE__").
-       Zhihu, Next.js, Nuxt.js and other SSR sites embed data this way.
     
     3. DOM CONTAINERS: repeated HTML structures detected on the page.
        Shown by scout_list_elements().
 
     Returns:
-        Count of APIs, DOM containers, and embedded data sources found.
+        Total count of network APIs, DOM containers, and SSR data sources.
     """
     global _monitor, _dom, _exporter, _browser
 
@@ -146,13 +172,12 @@ def scout_analyze() -> str:
     if _login_pending:
         return "Error: call scout_wait_login() first."
 
-    import time
-    time.sleep(3)
-    api_count = _monitor.wait_new(timeout=3.0) if _monitor else 0
-    # 再 flush 一次，抓取延迟到达的 API（页面懒加载可能在 3s 后才触发）
+    import time as _time
+    _time.sleep(3)
+    before_count = len(_monitor.api_records) if _monitor else 0
     if _monitor:
-        time.sleep(1)
-        api_count += _monitor.flush()
+        _monitor.step(timeout=5.0)
+    new_count = (len(_monitor.api_records) - before_count) if _monitor else 0
 
     embedded_count = _monitor.capture_embedded_json() if _monitor else 0
 
@@ -161,20 +186,22 @@ def scout_analyze() -> str:
 
     containers = _dom.find_containers()
     dom_count = len(_dom.containers_cache)
+    total_api = len(_monitor.api_records) if _monitor else 0
+    total_all = total_api + embedded_count
 
     parts = [f"{_browser.tab_label()}", ""]
 
     # 1. Network APIs — inline list
     parts.append("=== Network APIs ===")
-    if api_count > 0:
+    if total_api > 0:
         api_list = _monitor.list_apis()
         lines = api_list.split("\n")
-        parts.append(f"{api_count} captured:")
+        parts.append(f"{total_api} total ({new_count} new since last check):")
         parts.extend(lines[:8])
         if len(lines) > 8:
             parts.append(f"... and {len(lines) - 8} more")
     else:
-        parts.append("0 — 此页面是服务端渲染(SSR)，数据在 HTML DOM 中")
+        parts.append("0 — 此页面可能为纯 SSR 页面，数据在 HTML/DOM 中。用 scout_search() 搜索关键词。")
     parts.append("")
 
     # 2. DOM structure — containers + semantic tags
@@ -250,10 +277,10 @@ def scout_action(action: str, value: str | None = None, container: str | None = 
         - "300"               : scroll down exactly 300px
         - "-200"              : scroll up exactly 200px
 
-    After executing, returns number of newly captured API endpoints and
-    DOM container changes. This is how you trigger infinite-scroll pagination
-    or dynamic content loading — scroll, then check scout_list_apis() for
-    new endpoints.
+    After executing, waits for new API requests to arrive and returns the
+    count of newly captured endpoints. Use this to trigger searches, scrolls,
+    or other interactions that produce API calls — new requests are
+    automatically captured and available via scout_list_apis() / scout_search().
 
     Args:
         action: "search" or "scroll"
@@ -303,7 +330,7 @@ def scout_action(action: str, value: str | None = None, container: str | None = 
 
             time.sleep(2)
 
-            new_count = _monitor.wait_new(timeout=3.0) if _monitor else 0
+            new_count = _monitor.step(timeout=5.0).__len__() if _monitor else 0
             return f"Executed {action}: {value}, captured {new_count} new APIs"
         except Exception as e:
             return f"Search failed: {e}"
@@ -357,7 +384,7 @@ def scout_action(action: str, value: str | None = None, container: str | None = 
             import time
             time.sleep(2)
 
-            new_apis = _monitor.wait_new(timeout=3.0) if _monitor else 0
+            new_apis = len(_monitor.step(timeout=5.0)) if _monitor else 0
             recurring = _monitor.recurring_since(counts_snapshot) if _monitor else []
 
             dom_new = 0
@@ -773,7 +800,7 @@ def scout_fetch_api(
         if not _monitor:
             _monitor = NetworkMonitor(_browser.get_current_tab())
             _monitor.start()
-        _monitor.wait_new(timeout=5.0)
+        _monitor.step(timeout=5.0)
 
         if not _monitor.api_records:
             return "No JSON API requests were captured on this page."

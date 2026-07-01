@@ -2,6 +2,7 @@
 
 import json
 import re
+import time as _time
 
 
 def _leaf_count(obj: dict | list, depth: int = 0) -> int:
@@ -60,16 +61,19 @@ class NetworkMonitor:
         self.tab.listen.stop()
 
     def step(self, timeout: float = 2.0) -> list:
-        """Step through captured packets using listen.steps().
+        """Drain captured packets from the listener queue one by one.
 
+        Uses listen.wait() to avoid tail-packet loss from steps(gap=N).
         Returns a list of DataPacket objects that were stored as JSON APIs.
         """
         new_packets = []
-        for batch in self.tab.listen.steps(timeout=timeout, gap=5):
-            items = batch if isinstance(batch, list) else [batch]
-            for packet in items:
-                if self.filter_and_store(packet):
-                    new_packets.append(packet)
+        deadline = _time.time() + timeout
+        while _time.time() < deadline:
+            pkt = self.tab.listen.wait(timeout=0.5)
+            if not pkt:
+                break
+            if self.filter_and_store(pkt):
+                new_packets.append(pkt)
         return new_packets
 
     def flush(self) -> int:
