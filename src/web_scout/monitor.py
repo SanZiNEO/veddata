@@ -356,43 +356,44 @@ class NetworkMonitor:
         return None
 
     def capture_embedded_json(self) -> int:
-        """Extract embedded JSON from window globals and <script type=application/json>."""
+        """Extract embedded JSON from window globals and <script> tags.
+
+        Uses pattern-based discovery: scans window globals matching
+        (STATE|DATA|INITIAL|PRELOAD|STORE|APP|NUXT|CONFIG) and tries to
+        JSON-parse all <script> tag contents, regardless of type attribute."""
         self.embedded_records.clear()
 
         js = """
         (function() {
-            var targets = [
-                '__INITIAL_STATE__', '__NEXT_DATA__', '__NUXT__',
-                '__PRELOADED_STATE__', '__APP_DATA__', '__RENDER_DATA__',
-                '__ASYNC_DATA__', 'zhihuWebApp', 'zhihuHybrid'
-            ];
             var results = {};
-            for (var i = 0; i < targets.length; i++) {
-                var key = targets[i];
+            // 按命名规律通配扫描 window 全局变量
+            var keys = Object.keys(window);
+            var pattern = /(STATE|DATA|INITIAL|PRELOAD|STORE|APP|NUXT|CONFIG)/i;
+            for (var i = 0; i < keys.length; i++) {
+                var key = keys[i];
+                if (key.length > 40) continue;
+                if (!pattern.test(key)) continue;
                 try {
                     var val = window[key];
-                    if (val !== undefined && val !== null) {
-                        results[key] = val;
+                    if (val && typeof val === 'object' && !Array.isArray(val)) {
+                        var size = Object.keys(val).length;
+                        if (size >= 2) results[key] = val;
                     }
                 } catch(e) {}
             }
-            var scripts = document.querySelectorAll(
-                'script[type="application/json"], script[type="application/ld+json"], script[type="text/json"]'
-            );
+            // 尝试解析所有 <script> 标签文本内容
+            var scripts = document.getElementsByTagName('script');
             for (var j = 0; j < scripts.length; j++) {
                 var s = scripts[j];
-                var id = s.id || ('script_json_' + j);
-                try {
-                    results[id] = JSON.parse(s.textContent);
-                } catch(e) {}
-            }
-            // 兜底: 按 id 抓取常见 SSR 数据脚本
-            var knownIds = ['js-initialData', '__NEXT_DATA__', '__NUXT__', 'initialState'];
-            for (var k = 0; k < knownIds.length; k++) {
-                var el = document.getElementById(knownIds[k]);
-                if (el) {
-                    try { results[knownIds[k]] = JSON.parse(el.textContent); } catch(e) {}
-                }
+                var t = (s.type || '').toLowerCase();
+                if (t && t.indexOf('javascript') !== -1 && t.indexOf('json') === -1) continue;
+                var text = s.textContent.trim();
+                if (!text || text.length < 20 || text.length > 200000) continue;
+                // 快速排除 JS 代码: JSON 以 { 或 [ 开头
+                var firstChar = text.charAt(0);
+                if (firstChar !== '{' && firstChar !== '[') continue;
+                var id = s.id || ('script_' + j);
+                try { var parsed = JSON.parse(text); results[id] = parsed; } catch(e) {}
             }
             return JSON.stringify(results);
         })()
