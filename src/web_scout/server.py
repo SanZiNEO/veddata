@@ -724,7 +724,7 @@ def scout_list_browsers() -> str:
     running = 0
     for port in range(9222, 9232):
         try:
-            co = ChromiumOptions().set_address(f"127.0.0.1:{port}")
+            co = ChromiumOptions().set_address(f"127.0.0.1:{port}").existing_only(True)
             browser = Chromium(co)
             tab = browser.latest_tab
             title = tab.title[:50] if tab.title else "(no title)"
