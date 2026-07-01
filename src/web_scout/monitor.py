@@ -364,7 +364,7 @@ class NetworkMonitor:
             var targets = [
                 '__INITIAL_STATE__', '__NEXT_DATA__', '__NUXT__',
                 '__PRELOADED_STATE__', '__APP_DATA__', '__RENDER_DATA__',
-                '__ASYNC_DATA__'
+                '__ASYNC_DATA__', 'zhihuWebApp', 'zhihuHybrid'
             ];
             var results = {};
             for (var i = 0; i < targets.length; i++) {
@@ -377,7 +377,7 @@ class NetworkMonitor:
                 } catch(e) {}
             }
             var scripts = document.querySelectorAll(
-                'script[type="application/json"], script[type="application/ld+json"]'
+                'script[type="application/json"], script[type="application/ld+json"], script[type="text/json"]'
             );
             for (var j = 0; j < scripts.length; j++) {
                 var s = scripts[j];
@@ -385,6 +385,14 @@ class NetworkMonitor:
                 try {
                     results[id] = JSON.parse(s.textContent);
                 } catch(e) {}
+            }
+            // 兜底: 按 id 抓取常见 SSR 数据脚本
+            var knownIds = ['js-initialData', '__NEXT_DATA__', '__NUXT__', 'initialState'];
+            for (var k = 0; k < knownIds.length; k++) {
+                var el = document.getElementById(knownIds[k]);
+                if (el) {
+                    try { results[knownIds[k]] = JSON.parse(el.textContent); } catch(e) {}
+                }
             }
             return JSON.stringify(results);
         })()
