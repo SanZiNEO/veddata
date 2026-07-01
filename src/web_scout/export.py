@@ -10,12 +10,13 @@ class Exporter:
     def __init__(self, response_dir: str = "./response"):
         self.response_dir = response_dir
 
-    def export(self, api_record: dict, format: str = "both") -> str:
+    def export(self, api_record: dict, format: str = "both", output_dir: str | None = None) -> str:
         """Export an API data source.
 
         Args:
             api_record: A record dict from NetworkMonitor.api_records.
             format: "raw" | "compact" | "both"
+            output_dir: Override save directory for this call (default self.response_dir).
 
         Returns:
             Status message with output details.
@@ -23,7 +24,7 @@ class Exporter:
         parts = []
 
         if format in ("raw", "both"):
-            path = self.save_raw(api_record)
+            path = self.save_raw(api_record, output_dir)
             parts.append(f"Raw data saved: {path}")
 
         if format in ("compact", "both"):
@@ -32,10 +33,13 @@ class Exporter:
 
         return "\n\n".join(parts)
 
-    def save_raw(self, api_record: dict) -> str:
+    def save_raw(self, api_record: dict, output_dir: str | None = None) -> str:
         """Save the raw JSON response to a file.
 
         Filename is derived from the URL path (last two segments).
+
+        Args:
+            output_dir: Override save directory (default self.response_dir).
 
         Returns:
             File path of the saved JSON.
@@ -51,14 +55,15 @@ class Exporter:
         else:
             filename = "api_response.json"
 
-        filepath = os.path.join(self.response_dir, filename)
+        save_dir = output_dir or self.response_dir
+        filepath = os.path.join(save_dir, filename)
         base, ext = os.path.splitext(filepath)
         counter = 1
         while os.path.exists(filepath):
             counter += 1
             filepath = f"{base}_page{counter}{ext}"
 
-        os.makedirs(self.response_dir, exist_ok=True)
+        os.makedirs(save_dir, exist_ok=True)
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(api_record["response_body"], f, ensure_ascii=False, indent=2)
 

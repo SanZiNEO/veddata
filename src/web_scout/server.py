@@ -13,6 +13,7 @@ from web_scout.export import Exporter
 
 # Clear previous response directory on startup
 _response_dir = os.environ.get("RESPONSE_DIR", "./response")
+state._response_dir = _response_dir
 if os.path.exists(_response_dir):
     import shutil
     shutil.rmtree(_response_dir)

@@ -69,7 +69,7 @@ Optional env vars:
 | `USER_DATA_DIR` | (temp) | Persistent profile for login state |
 | `LOGIN_TIMEOUT` | `"300"` | Max login wait in seconds |
 | `MAX_TEXT_LENGTH` | `"3000"` | Max characters for scout_open page text |
-| `RESPONSE_DIR` | `"./response"` | Export output directory |
+| `RESPONSE_DIR` | `"./response"` | Default export directory, overridable by `output_dir` param |
 
 ## Tools (19)
 
@@ -103,7 +103,7 @@ Optional env vars:
 | `scout_inspect` | Show request/response for APIs, supports comma-separated IDs |
 | `scout_search` | Global search: API bodies → SSR JSON → page source → DOM, supports comma-separated keywords |
 | `scout_context` | Search keyword returning field paths + values, supports comma-separated keywords |
-| `scout_export` | Export APIs: field doc + raw JSON, supports comma-separated IDs |
+| `scout_export` | Export APIs: field doc + raw JSON, supports comma-separated IDs and `output_dir` |
 | `scout_export_all` | Batch-export all captured APIs at once |
 | `scout_peek` | Open → listen → match API by path → return details in one call |
 

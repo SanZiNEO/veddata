@@ -69,7 +69,7 @@ pip install -e .
 | `USER_DATA_DIR` | 临时 | 持久化用户文件夹，保留登录态 |
 | `LOGIN_TIMEOUT` | `"300"` | 登录最大等待秒数 |
 | `MAX_TEXT_LENGTH` | `"3000"` | scout_open 页面文本最大字符数 |
-| `RESPONSE_DIR` | `"./response"` | 数据导出目录 |
+| `RESPONSE_DIR` | `"./response"` | 数据导出默认目录，可用 `output_dir` 参数覆盖 |
 
 ## 工具（19 个）
 
@@ -103,7 +103,7 @@ pip install -e .
 | `scout_inspect` | 查看 API 的完整请求/响应，支持逗号分隔多 ID |
 | `scout_search` | 全局搜索：API 响应体 → SSR JSON → 页面源码 → DOM，支持逗号分隔多关键词 |
 | `scout_context` | 搜索关键词返回精确字段路径 + 采样值，支持逗号分隔多关键词 |
-| `scout_export` | 导出 API：压缩字段文档 + 原始 JSON，支持逗号分隔多 ID |
+| `scout_export` | 导出 API：字段文档 + 原始 JSON，支持逗号分隔多 ID，`output_dir` 指定目录 |
 | `scout_export_all` | 批量导出所有已捕获的 API |
 | `scout_peek` | 打开页面 → 监听 → 按路径匹配 API → 一步返回详情 |
 

@@ -12,6 +12,7 @@ _dom_scanners: dict[int, DOMScanner] = {}
 _login: LoginDetector | None = None
 _exporter: Exporter | None = None
 _login_pending: bool = False
+_response_dir: str | None = None
 
 # MCP instance — injected by server.py before tool modules are imported
 from fastmcp import FastMCP
@@ -36,11 +37,17 @@ def resolve_tab(tab: int = 0) -> tuple[int, NetworkMonitor | None, DOMScanner | 
     return (tab_num, _monitors.get(tab_num), _dom_scanners.get(tab_num))
 
 
-def get_exporter() -> Exporter:
-    """Get or create the global Exporter instance."""
+def get_exporter(output_dir: str | None = None) -> Exporter:
+    """Get or create the global Exporter instance.
+
+    Args:
+        output_dir: Override directory for this call (default _response_dir or ./response).
+    """
     global _exporter
+    if output_dir:
+        return Exporter(response_dir=output_dir)
     if not _exporter:
-        _exporter = Exporter()
+        _exporter = Exporter(response_dir=_response_dir or "./response")
     return _exporter
 
 

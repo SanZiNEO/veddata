@@ -245,17 +245,18 @@ def scout_context(keyword: str, tab: int = 0) -> str:
 
 
 @state.mcp.tool()
-def scout_export(index: int = 0, format: str = "both", tab: int = 0, indices: str = "") -> str:
+def scout_export(index: int = 0, format: str = "both", tab: int = 0, indices: str = "", output_dir: str | None = None) -> str:
     """Export one or more captured API data sources.
 
     Pass comma-separated IDs in `indices` for multiple (e.g. "2,4").
-    Use `index` for a single API.
+    Use `index` for a single API. Use `output_dir` to override save directory.
 
     Args:
         index: API endpoint ID (from scout_apis output). Use 0 when using indices.
         format: "raw" | "compact" | "both" (default "both").
         tab: Tab number (0 = current active tab).
         indices: Comma-separated API IDs (e.g. "2,4"). Overrides index.
+        output_dir: Override save directory (uses RESPONSE_DIR env or ./response).
 
     Returns:
         Export result with saved file path and/or field document.
@@ -265,7 +266,7 @@ def scout_export(index: int = 0, format: str = "both", tab: int = 0, indices: st
         return "No data to export. Call scout_open() first."
 
     ids = _parse_indices(index, indices)
-    exporter = state.get_exporter()
+    exporter = state.get_exporter(output_dir)
     parts = [state.prefix(tab_num)]
 
     exported = 0
@@ -276,7 +277,7 @@ def scout_export(index: int = 0, format: str = "both", tab: int = 0, indices: st
             continue
         if len(ids) > 1:
             parts.append(f"\n--- API #{n} ---")
-        result = exporter.export(record, format)
+        result = exporter.export(record, format, output_dir)
         parts.append(result)
         exported += 1
 
@@ -286,7 +287,7 @@ def scout_export(index: int = 0, format: str = "both", tab: int = 0, indices: st
 
 
 @state.mcp.tool()
-def scout_export_all(format: str = "both", tab: int = 0) -> str:
+def scout_export_all(format: str = "both", tab: int = 0, output_dir: str | None = None) -> str:
     """Export all captured API data sources at once.
 
     Iterates through every captured API endpoint and exports each one
@@ -296,6 +297,7 @@ def scout_export_all(format: str = "both", tab: int = 0) -> str:
     Args:
         format: "raw" | "compact" | "both" (default "both").
         tab: Tab number (0 = current active tab).
+        output_dir: Override save directory (uses RESPONSE_DIR env or ./response).
 
     Returns:
         Summary of how many APIs were exported and the output directory.
@@ -304,7 +306,7 @@ def scout_export_all(format: str = "both", tab: int = 0) -> str:
     if not monitor:
         return "No data to export. Call scout_open() first."
 
-    exporter = state.get_exporter()
+    exporter = state.get_exporter(output_dir)
     records = monitor.api_records + monitor.embedded_records
     if not records:
         return f"{state.prefix(tab_num)}\nNo APIs captured yet."
@@ -312,15 +314,16 @@ def scout_export_all(format: str = "both", tab: int = 0) -> str:
     results = []
     for record in records:
         try:
-            exporter.export(record, format)
+            exporter.export(record, format, output_dir)
             results.append(f"  [{record['id']}] {record['method']} {record['path']}  -> exported")
         except Exception as e:
             results.append(f"  [{record['id']}] {record['method']} {record['path']}  -> FAILED: {e}")
 
+    save_dir = output_dir or exporter.response_dir
     lines = [
         state.prefix(tab_num),
         f"Batch export complete: {len(results)} APIs exported.",
-        f"Output directory: {exporter.response_dir}/",
+        f"Output directory: {save_dir}/",
         "",
     ]
     lines.extend(results)
