@@ -955,8 +955,6 @@ def scout_fetch(max_length: int = 5000, start_index: int = 0) -> str:
     if not _browser:
         return "Error: call scout_open first."
 
-    import json as _json
-
     try:
         title = str(_browser.tab.title or "")
         url = str(_browser.tab.url or "")
@@ -972,24 +970,18 @@ def scout_fetch(max_length: int = 5000, start_index: int = 0) -> str:
 
     links = []
     try:
-        raw = _browser.tab.run_js("""
-        (function() {
-            var els = document.querySelectorAll('a[href]');
-            var arr = [];
-            for (var i = 0; i < els.length && arr.length < 100; i++) {
-                var h = els[i].href;
-                if (!h || h.indexOf('javascript:') === 0) continue;
-                var t = (els[i].textContent || '').trim().substring(0, 80);
-                if (!t) t = h.substring(0, 80);
-                arr.push(t + ' -> ' + h);
-            }
-            return JSON.stringify(arr);
-        })()
-        """)
-        if isinstance(raw, str) and raw.startswith('['):
-            links = _json.loads(raw)
-    except Exception:
-        links = []
+        html = _browser.tab.html
+        import re as _re
+        for m in _re.finditer(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', html, _re.DOTALL | _re.IGNORECASE):
+            href, raw_text = m.group(1), m.group(2)
+            if not href or href.startswith('javascript:'):
+                continue
+            txt = _re.sub(r'<[^>]+>', '', raw_text).strip()[:80]
+            if not txt:
+                txt = href[:80]
+            links.append(f'{txt} -> {href}')
+            if len(links) >= 100:
+                break
     except Exception:
         links = []
 
