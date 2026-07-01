@@ -100,10 +100,10 @@ Optional env vars:
 | Tool | Description |
 |------|-------------|
 | `scout_apis` | List captured API endpoints, with optional keyword filter |
-| `scout_inspect` | Show full request/response for an API (preview or full mode) |
-| `scout_search` | Global search: API bodies → SSR JSON → page source → DOM text |
-| `scout_context` | Search keyword and return exact field paths + sample values |
-| `scout_export` | Export single API: compressed field doc + raw JSON |
+| `scout_inspect` | Show request/response for APIs, supports comma-separated IDs |
+| `scout_search` | Global search: API bodies → SSR JSON → page source → DOM, supports comma-separated keywords |
+| `scout_context` | Search keyword returning field paths + values, supports comma-separated keywords |
+| `scout_export` | Export APIs: field doc + raw JSON, supports comma-separated IDs |
 | `scout_export_all` | Batch-export all captured APIs at once |
 | `scout_peek` | Open → listen → match API by path → return details in one call |
 
@@ -118,11 +118,11 @@ Optional env vars:
 
 Pick a visible keyword from page text and trace it directly to the API:
 
-1. `scout_open(url)` — open page, read rendered text, pick a visible keyword
+1. `scout_open(url)` — open page, read rendered text, pick keywords (can be multiple)
 2. `scout_act("scroll")` — scroll to trigger feed/recommendation APIs
-3. `scout_search(keyword)` — find which API response contains the keyword
-4. `scout_context(keyword)` — see exact field path and value, confirm the target
-5. `scout_inspect(n)` → `scout_export(n)` — inspect params, export data
+3. `scout_search("kw1,kw2")` — find which APIs contain the keywords
+4. `scout_context("kw1,kw2")` — see exact field paths and values, confirm targets
+5. `scout_inspect(indices="1,3")` → `scout_export(indices="1,3")` — batch inspect and export
 
 **Key insight**: skip enumeration (scan/apis), go directly from keyword to API+field. Four steps to pinpoint the target API.
 

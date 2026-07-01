@@ -100,10 +100,10 @@ pip install -e .
 | 工具 | 说明 |
 |------|------|
 | `scout_apis` | 列出所有捕获的 API 端点，支持关键词过滤 |
-| `scout_inspect` | 查看 API 的完整请求/响应（支持预览和完整模式） |
-| `scout_search` | 全局搜索：API 响应体 → SSR JSON → 页面源码 → DOM 文本 |
-| `scout_context` | 搜索关键词并返回精确字段路径 + 采样值 |
-| `scout_export` | 导出单个 API：压缩字段文档 + 原始 JSON |
+| `scout_inspect` | 查看 API 的完整请求/响应，支持逗号分隔多 ID |
+| `scout_search` | 全局搜索：API 响应体 → SSR JSON → 页面源码 → DOM，支持逗号分隔多关键词 |
+| `scout_context` | 搜索关键词返回精确字段路径 + 采样值，支持逗号分隔多关键词 |
+| `scout_export` | 导出 API：压缩字段文档 + 原始 JSON，支持逗号分隔多 ID |
 | `scout_export_all` | 批量导出所有已捕获的 API |
 | `scout_peek` | 打开页面 → 监听 → 按路径匹配 API → 一步返回详情 |
 
@@ -118,11 +118,11 @@ pip install -e .
 
 从页面文本中选一个关键词，直接反查数据来源：
 
-1. `scout_open(url)` — 打开页面，浏览渲染文本，选一个可见的关键词
+1. `scout_open(url)` — 打开页面，浏览渲染文本，选关键词（可多个）
 2. `scout_act("scroll")` — 滚动加载，触发推荐/动态流等接口
-3. `scout_search(keyword)` — 用关键词反查，看哪个 API 的响应体里有它
-4. `scout_context(keyword)` — 看精确字段路径和值，确认目标
-5. `scout_inspect(n)` → `scout_export(n)` — 检查请求参数，导出数据
+3. `scout_search("词1,词2")` — 用关键词反查，看哪些 API 的响应体里有它们
+4. `scout_context("词1,词2")` — 看精确字段路径和值，确认目标
+5. `scout_inspect(indices="1,3")` → `scout_export(indices="1,3")` — 批量查看和导出
 
 **核心思路**：跳过枚举（scan/apis），从关键词直接反推 API 和字段路径。四步定位，比全量扫描快。
 
