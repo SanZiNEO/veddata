@@ -402,49 +402,68 @@ class NetworkMonitor:
                 pass
         return None
 
-    def capture_embedded_json(self) -> int:
-        """Extract embedded JSON from window globals and <script> tags.
+    def _extract_from_html(self) -> dict:
+        """Extract SSR data from raw HTML source (bypasses JS window access)."""
+        import re as _re
+        html = self.tab.html
+        results = {}
+        # 匹配 window.__XXX__ = {JSON};
+        for name in ['__INITIAL_STATE__', '__NEXT_DATA__', '__NUXT__',
+                     '__PRELOADED_STATE__', '__APP_DATA__', '__ASYNC_DATA__']:
+            pattern = rf'window\.{_re.escape(name)}\s*=\s*(\{{.+?\}});'
+            matches = _re.findall(pattern, html, _re.DOTALL)
+            if not matches:
+                continue
+            # 取最长匹配（嵌套 JSON 可能被 +? 截断，多次拼接）
+            text = matches[-1] if matches else ""
+            if len(text) < 20:
+                continue
+            try:
+                data = json.loads(text)
+                results[name] = data
+            except json.JSONDecodeError:
+                pass
+        return results
 
-        Uses pattern-based discovery: scans window globals matching
-        (STATE|DATA|INITIAL|PRELOAD|STORE|APP|NUXT|CONFIG) and tries to
-        JSON-parse all <script> tag contents, regardless of type attribute."""
+    def capture_embedded_json(self) -> int:
         self.embedded_records.clear()
 
-        js = """
-        (function() {
-            var results = {};
-            // 直接尝试已知 SSR 变量名（不依赖 Object.keys 枚举）
-            var known = ['__INITIAL_STATE__', '__NEXT_DATA__', '__NUXT__',
-                         '__PRELOADED_STATE__', '__APP_DATA__', '__RENDER_DATA__',
-                         '__ASYNC_DATA__', '__REDUX_STATE__', '__APOLLO_STATE__'];
-            for (var k = 0; k < known.length; k++) {
-                try {
-                    var v = window[known[k]];
-                    if (v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length >= 2) {
-                        results[known[k]] = v;
-                    }
-                } catch(e) {}
-            }
-            // 尝试解析所有 <script> 标签文本内容
-            var scripts = document.getElementsByTagName('script');
-            for (var j = 0; j < scripts.length; j++) {
-                var s = scripts[j];
-                var text = s.textContent.trim();
-                if (!text || text.length < 20 || text.length > 200000) continue;
-                var firstChar = text.charAt(0);
-                if (firstChar !== '{' && firstChar !== '[') continue;
-                try { var parsed = JSON.parse(text); var id = s.id || ('script_' + j); results[id] = parsed; } catch(e) {}
-            }
-            return JSON.stringify(results);
-        })()
-        """
-        try:
-            raw = self.tab.run_js(js)
-            if not raw:
-                return 0
-            data = json.loads(raw)
-        except (json.JSONDecodeError, Exception):
-            return 0
+        # 方式 1: 直接从 HTML 源码提取（最可靠——不受 React hydration 影响）
+        data = self._extract_from_html()
+
+        # 方式 2: 如果 HTML 提取为空，尝试 JS window 访问
+        if not data:
+            js = """
+            (function() {
+                var results = {};
+                var known = ['__INITIAL_STATE__', '__NEXT_DATA__', '__NUXT__',
+                             '__PRELOADED_STATE__', '__APP_DATA__', '__RENDER_DATA__',
+                             '__ASYNC_DATA__', '__REDUX_STATE__', '__APOLLO_STATE__'];
+                for (var k = 0; k < known.length; k++) {
+                    try {
+                        var v = window[known[k]];
+                        if (v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length >= 2) {
+                            results[known[k]] = v;
+                        }
+                    } catch(e) {}
+                }
+                var scripts = document.getElementsByTagName('script');
+                for (var j = 0; j < scripts.length; j++) {
+                    var s = scripts[j];
+                    var text = s.textContent.trim();
+                    if (!text || text.length < 20 || text.length > 200000) continue;
+                    if (text.charAt(0) !== '{' && text.charAt(0) !== '[') continue;
+                    try { var parsed = JSON.parse(text); var id = s.id || ('script_' + j); results[id] = parsed; } catch(e) {}
+                }
+                return JSON.stringify(results);
+            })()
+            """
+            try:
+                raw = self.tab.run_js(js)
+                if raw:
+                    data = json.loads(raw)
+            except (json.JSONDecodeError, Exception):
+                pass
 
         if not isinstance(data, dict):
             return 0
