@@ -116,45 +116,27 @@ Optional env vars:
 
 ### 🚀 Fast Path (Recommended)
 
-```bash
-# 1. Open page, pick a visible keyword from text
-scout_open("https://www.bilibili.com")
-→ page text: 原神 男人领域 鬼畜 …
+Pick a visible keyword from page text and trace it directly to the API:
 
-# 2. Scroll to trigger more APIs (recommendation/feed)
-scout_act("scroll")
-→ +11 APIs, hits feed/rcmd endpoint
+1. `scout_open(url)` — open page, read rendered text, pick a visible keyword
+2. `scout_act("scroll")` — scroll to trigger feed/recommendation APIs
+3. `scout_search(keyword)` — find which API response contains the keyword
+4. `scout_context(keyword)` — see exact field path and value, confirm the target
+5. `scout_inspect(n)` → `scout_export(n)` — inspect params, export data
 
-# 3. Search by keyword to find which API contains it
-scout_search("男人领域")
-→ [51] GET feed/rcmd  ← hit!
-
-# 4. See exact field path and value
-scout_context("男人领域")
-→ data.item[0].title = "男人领域"
-
-# 5. Confirm target, inspect params, export
-scout_inspect(51)
-scout_export(51)
-```
-
-**Key insight**: skip enumeration (scan/apis), go directly from keyword → search → context to pinpoint the exact API and field. Much faster than "full scan → inspect one by one".
+**Key insight**: skip enumeration (scan/apis), go directly from keyword to API+field. Four steps to pinpoint the target API.
 
 ### Full Scan (when you do not have a keyword)
 
-```bash
-scout_open(url)
-scout_act("search", kw)      # trigger search APIs
-scout_scan(mode="all")       # full scan
-scout_apis()                 # list all endpoints
-scout_inspect(n)             # inspect one by one
-scout_export(n)
-```
+When you have no direction and need to survey available data sources:
 
-### SSR Pages (dxy.com, etc.)
+1. `scout_open(url)` → `scout_act("search", kw)` — trigger search APIs
+2. `scout_scan(mode="all")` — capture APIs + DOM containers + SSR data in one call
+3. `scout_apis()` — list all endpoints, inspect one by one with `scout_inspect(n)`
 
-Data is in HTML/DOM, not XHR. Use `scout_search` + `scout_scan(mode="dom")` instead.
-`scout_apis()` returning 0 is expected behavior.
+### SSR Pages
+
+Data lives in HTML/DOM, not XHR. `scout_apis()` returning 0 is expected. Use `scout_search` + `scout_scan(mode="dom")` instead.
 
 ## Architecture
 

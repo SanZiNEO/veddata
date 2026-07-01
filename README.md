@@ -21,7 +21,7 @@
 | 页面全文 → Markdown 给 AI 阅读 | E2EE 解密 |
 | 压缩字段文档 → AI 据此写爬虫 | 自动生成可运行的爬虫代码 |
 
-适用于标准 HTTP JSON API 站点（小红书 / B站 / 电商）。不适用于加密数据流、wasm 混淆等逆向场景。
+适用于标准 HTTP JSON API 站点。不适用于加密数据流、wasm 混淆等逆向场景。
 
 ## 原理
 
@@ -116,44 +116,27 @@ pip install -e .
 
 ### 🚀 快速路径（推荐）
 
-```bash
-# 1. 打开页面，从文本中选一个可见关键词
-scout_open("https://www.bilibili.com")
-→ 页面文本: 原神 男人领域 鬼畜 …
+从页面文本中选一个关键词，直接反查数据来源：
 
-# 2. 滚动触发更多 API（推荐/动态流接口）
-scout_act("scroll")
-→ +11 APIs, 命中 feed/rcmd 推荐接口
+1. `scout_open(url)` — 打开页面，浏览渲染文本，选一个可见的关键词
+2. `scout_act("scroll")` — 滚动加载，触发推荐/动态流等接口
+3. `scout_search(keyword)` — 用关键词反查，看哪个 API 的响应体里有它
+4. `scout_context(keyword)` — 看精确字段路径和值，确认目标
+5. `scout_inspect(n)` → `scout_export(n)` — 检查请求参数，导出数据
 
-# 3. 用关键词搜索，定位是哪个 API
-scout_search("男人领域")
-→ [51] GET feed/rcmd  ← 命中！
-
-# 4. 看精确字段路径和值
-scout_context("男人领域")
-→ data.item[0].title = "男人领域"
-
-# 5. 确认目标，检查请求参数、导出
-scout_inspect(51)
-scout_export(51)
-```
-
-**核心思路**：跳过枚举扫描（scan/apis），直接从关键词反推 → 搜索定位 API → context 给字段路径。比传统"全量扫描 → 逐个 inspect"快。
+**核心思路**：跳过枚举（scan/apis），从关键词直接反推 API 和字段路径。四步定位，比全量扫描快。
 
 ### 全量扫描（不知道关键词时）
 
-```bash
-scout_open(url)
-scout_act("search", kw)      # 触发搜索 API
-scout_scan(mode="all")       # 全量扫描
-scout_apis()                 # 列出所有端点
-scout_inspect(n)             # 逐个查看
-scout_export(n)
-```
+完全没有方向时，先看页面有哪些数据源：
 
-### SSR 页面（丁香园等）
+1. `scout_open(url)` → `scout_act("search", kw)` — 触发搜索接口
+2. `scout_scan(mode="all")` — 一次性抓 API + DOM 容器 + SSR 数据
+3. `scout_apis()` — 列出所有端点，逐个 `scout_inspect(n)`
 
-数据在 HTML/DOM 中，不在 XHR 里。用 `scout_search` + `scout_scan(mode="dom")`，`scout_apis()` 返回 0 是预期行为。
+### SSR 页面
+
+数据全在 HTML 里，没有 XHR 请求。`scout_apis()` 返回 0 是正常的，改用 `scout_search` + `scout_scan(mode="dom")`。
 
 ## 架构
 
