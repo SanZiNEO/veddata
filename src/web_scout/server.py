@@ -46,6 +46,17 @@ _exporter: Exporter | None = None
 
 _login_pending: bool = False
 
+# 端口状态跟踪（内存中，不连接浏览器进程）
+_port_tracker: dict[int, dict] = {}  # port -> {url, tool}
+
+
+def _port_take(port: int, url: str) -> None:
+    _port_tracker[port] = {"url": url, "tool": "scout_open"}
+
+
+def _port_release(port: int) -> None:
+    _port_tracker.pop(port, None)
+
 
 @mcp.tool()
 def scout_open(url: str) -> str:
@@ -77,6 +88,9 @@ def scout_open(url: str) -> str:
 
     if not _browser:
         _browser = BrowserSession()
+
+    if _browser.port is not None:
+        _port_take(_browser.port, url)
 
     _monitor = NetworkMonitor(_browser.tab)
     _monitor.start()
@@ -312,6 +326,14 @@ def scout_wait_login(timeout: int = 300) -> str:
 
     if not _browser or not _login:
         return "Error: call scout_open first."
+
+    # 已登录则直接返回，不等待
+    if not _login.is_login_required():
+        _login_pending = False
+        text = _browser.get_text()
+        return (f"已登录，无需等待。\n\n"
+                f"页面文本:\n{text[:2000]}\n\n"
+                f"调用 scout_analyze() 获取 API 端点。")
 
     result = _login.wait_for_login(timeout)
 
@@ -700,6 +722,8 @@ def scout_close(port: int | None = None) -> str:
     except Exception:
         pass
 
+    if _browser and _browser.port is not None:
+        _port_release(_browser.port)
     _browser = None
     _monitor = None
     _dom = None
@@ -710,36 +734,24 @@ def scout_close(port: int | None = None) -> str:
 
 @mcp.tool()
 def scout_list_browsers() -> str:
-    """List all running browser instances across ports 9222-9231.
+    """List all browser session ports tracked by this process.
 
-    Shows each port's status: active browser (with page title + URL) or free.
-    Useful for managing multiple concurrent browsing sessions and cleaning up
-    stale browser processes from previous runs.
-
-    Typical usage:
-      - Call this if scout_open() fails with port conflicts
-      - Call this when you suspect leftover browser processes are wasting resources
-      - After listing, call scout_close(port=N) to free up specific ports
+    Uses in-memory state (no browser connection needed — fast).
+    Shows which ports have active sessions created by scout_open.
 
     Returns:
-        Per-port status list with page info for active instances.
+        Per-port status list showing active sessions vs free ports.
     """
-    from DrissionPage import Chromium, ChromiumOptions
-
-    lines = ["Running browser instances:"]
+    lines = ["Browser port status (in-process tracking):"]
     running = 0
     for port in range(9222, 9232):
-        try:
-            co = ChromiumOptions().set_address(f"127.0.0.1:{port}").existing_only(True)
-            browser = Chromium(co)
-            tab = browser.latest_tab
-            title = tab.title[:50] if tab.title else "(no title)"
-            url = tab.url[:60] if tab.url else "about:blank"
-            lines.append(f"  [{port}] {title} — {url}")
+        info = _port_tracker.get(port)
+        if info:
+            url = info.get("url", "")[:60] if info.get("url") else "about:blank"
+            lines.append(f"  [{port}] active — {url}")
             running += 1
-            browser.quit()
-        except Exception:
-            lines.append(f"  [{port}] (free)")
+        else:
+            lines.append(f"  [{port}] free")
 
     lines.append(f"\n{running} active, {10 - running} free")
     return "\n".join(lines)

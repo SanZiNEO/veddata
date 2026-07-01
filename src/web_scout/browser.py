@@ -11,6 +11,8 @@ class BrowserSession:
     """Manages a Chromium browser session for page navigation and text extraction."""
 
     def __init__(self):
+        self.port: int | None = None
+
         if os.environ.get("HEADLESS", "false") == "true":
             headless = True
         else:
@@ -39,6 +41,7 @@ class BrowserSession:
                     co.set_user_data_path(user_data)
                 self._browser = Chromium(co)
                 self.tab = self._browser.latest_tab
+                self.port = port
                 return
             except Exception:
                 continue
