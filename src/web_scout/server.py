@@ -168,11 +168,9 @@ def scout_analyze() -> str:
         parts.append(f"{api_count} captured:")
         parts.extend(lines[:8])
         if len(lines) > 8:
-            parts.append(f"... and {len(lines) - 8} more (use scout_list_apis() for full list)")
+            parts.append(f"... and {len(lines) - 8} more")
     else:
         parts.append("0 — 此页面是服务端渲染(SSR)，数据在 HTML DOM 中")
-        parts.append("→ 使用 scout_fetch() 获取页面全部可见文本")
-        parts.append("→ 使用 scout_context(关键词) 精确定位数据")
     parts.append("")
 
     # 2. DOM structure — containers + semantic tags
@@ -205,7 +203,7 @@ def scout_analyze() -> str:
         pass
 
     if dom_count > 0:
-        parts.append("  容器预览 (scout_list_elements 查看完整):")
+        parts.append("  容器:")
         from web_scout.dom import DOMScanner as _D  # lazy import to get cache format
         cached = _dom.containers_cache
         for i, c in enumerate(cached[:5]):
@@ -221,14 +219,11 @@ def scout_analyze() -> str:
     # 3. Embedded JSON
     parts.append("=== Embedded JSON (SSR) ===")
     if embedded_count > 0:
-        parts.append(f"{embedded_count} 个 [SSR] 数据源，scout_list_apis() 可查看")
+        parts.append(f"{embedded_count} 个 [SSR] 数据源")
     else:
         parts.append("0")
     parts.append("")
-
-    # 4. Tool guide
     parts.append("---")
-    parts.append("scout_list_apis | scout_list_elements | scout_fetch | scout_context(kw) | scout_search(kw)")
 
     return "\n".join(parts)
 
