@@ -932,6 +932,43 @@ def scout_screenshot(name: str = "screenshot", full_page: bool = True) -> str:
         return f"Screenshot failed: {e}"
 
 
+@mcp.tool()
+def scout_fetch(max_length: int = 5000, start_index: int = 0) -> str:
+    """Fetch the visible text of the current page as a browser sees it.
+
+    Uses document.body.innerText — returns ALL visible text including
+    content below the fold AFTER you scroll to it. Does NOT strip
+    navigation/footer noise. Use this when scout_open returns too little
+    text (e.g. SPA pages, video pages).
+
+    Supports chunked reading: set start_index to continue from where
+    the previous call left off.
+
+    Args:
+        max_length: Maximum characters to return (default 5000, max 50000).
+        start_index: Start from this character index (default 0).
+
+    Returns:
+        Visible page text as plain text.
+    """
+    global _browser
+
+    if not _browser:
+        return "Error: call scout_open first."
+
+    try:
+        text = _browser.tab.run_js("return document.body.innerText || ''")
+        if not text:
+            return "(empty page)"
+        max_len = min(max_length, 50000)
+        chunk = text[start_index:start_index + max_len]
+        if len(chunk) == max_len and len(text) > start_index + max_len:
+            chunk += f"\n\n... (truncated, call scout_fetch(start_index={start_index + max_len}) for more)"
+        return chunk
+    except Exception as e:
+        return f"Fetch failed: {e}"
+
+
 def main():
     mcp.run()
 
