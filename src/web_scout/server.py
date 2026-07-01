@@ -461,29 +461,95 @@ def scout_click(index: int) -> str:
 def scout_search(keyword: str) -> str:
     """Search for data by keyword: try APIs first, fall back to DOM scan.
 
-    Searches the captured API response bodies for the keyword. If no API
-    matches, falls back to scanning the DOM for elements containing the
-    keyword, grouped by parent container.
+    Searches the captured API response bodies for the keyword. Returns
+    a numbered list of matching API endpoints. Use scout_context() to
+    see WHERE in the data the keyword was found, with field paths and values.
 
     Args:
         keyword: Search term.
 
     Returns:
-        API results or DOM keyword scan results.
+        Numbered list of matching API endpoints, or DOM scan results.
     """
     if not _monitor or not _dom:
         return "No data. Call scout_analyze() first after scout_open()."
 
     result = _monitor.list_apis(keyword=keyword)
     if result and result != "No APIs captured yet.":
-        lines = ["=== API Results ===", result]
-        lines.append("")
-        lines.append("Use scout_inspect_api(index) to inspect, scout_export(index) to export.")
-        return "\n".join(lines)
+        return result
 
-    dom_result = _dom.scan_by_keyword(keyword)
-    lines = ["=== No API match. DOM keyword scan: ===", "", dom_result]
+    return "No matches in captured APIs. Try scout_context() to search page text and DOM."
+
+
+@mcp.tool()
+def scout_context(keyword: str) -> str:
+    """Search all data sources for keyword, returning field paths and values.
+
+    Searches API responses, SSR embedded JSON, page meta tags, and DOM.
+    For each match, shows: source type, field path, and the actual value
+    containing the keyword. This is the tool to use when you want to know
+    WHERE a piece of data lives and what it looks like.
+
+    Args:
+        keyword: Text to search for across all data sources.
+
+    Returns:
+        Structured output showing source, field path, and value for each match.
+    """
+    global _monitor, _browser, _dom
+
+    if not _monitor:
+        return "No data. Call scout_analyze() first after scout_open()."
+
+    import json as _json
+
+    results = _monitor.find_context(keyword)
+
+    # DOM 搜索
+    if _dom:
+        dom_result = _dom.scan_by_keyword(keyword)
+        if dom_result and "No elements" not in dom_result:
+            results.append({"source": "[DOM]", "field": "", "value": dom_result})
+
+    # Page meta 搜索
+    if _browser:
+        js = """
+        var kw = arguments[0].toLowerCase();
+        var results = [];
+        var metas = document.querySelectorAll('meta[name], meta[property]');
+        for (var i = 0; i < metas.length; i++) {
+            var content = metas[i].getAttribute('content') || '';
+            if (content.toLowerCase().indexOf(kw) !== -1) {
+                results.push({
+                    tag: 'meta ' + (metas[i].getAttribute('name') || metas[i].getAttribute('property')),
+                    value: content.substring(0, 300)
+                });
+            }
+        }
+        return JSON.stringify(results);
+        """
+        try:
+            raw = _browser.tab.run_js(js)
+            meta_matches = _json.loads(raw)
+            for m in meta_matches:
+                results.append({"source": f"[Page] {m['tag']}", "field": "", "value": m["value"]})
+        except Exception:
+            pass
+
+    if not results:
+        return f"No matches found for '{keyword}' in any data source."
+
+    lines = [f'Context for "{keyword}":', ""]
+    for i, r in enumerate(results):
+        lines.append(f"--- Match #{i+1} ---")
+        lines.append(f"Source: {r['source']}")
+        if r.get("field"):
+            lines.append(f"Field:  {r['field']}")
+        lines.append(f"Value:  {r['value']}")
+        lines.append("")
+
     return "\n".join(lines)
+
 
 
 @mcp.tool()

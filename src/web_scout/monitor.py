@@ -325,6 +325,53 @@ class NetworkMonitor:
 
         return "\n".join(lines)
 
+    def find_context(self, keyword: str) -> list[dict]:
+        """Search all captured data for keyword, returning field paths and values.
+
+        Searches API response bodies, SSR embedded JSON, and page meta tags.
+        Returns list of {source, field, value} dicts.
+        """
+        results = []
+        kw = keyword.lower()
+        all_records = self.api_records + self.embedded_records
+
+        for rec in all_records:
+            body = rec.get("response_body", {})
+            matches = self._deep_search(body, kw, "")
+            source = f"[API] {rec['method']} {rec['path']}"
+            if rec.get("source") == "embedded":
+                source = f"[SSR] window.{rec['key']}"
+            for field_path, value in matches:
+                results.append({"source": source, "field": field_path, "value": self._truncate_val(value, 300)})
+
+        return results
+
+    @staticmethod
+    def _deep_search(obj, keyword: str, prefix: str = "") -> list[tuple[str, str]]:
+        """Recursively search JSON for string values containing keyword."""
+        results = []
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                full = f"{prefix}.{k}" if prefix else k
+                if isinstance(v, str) and keyword in v.lower():
+                    results.append((full, v))
+                elif isinstance(v, (dict, list)):
+                    results.extend(NetworkMonitor._deep_search(v, keyword, full))
+        elif isinstance(obj, list):
+            for i, item in enumerate(obj):
+                full = f"{prefix}[{i}]"
+                if isinstance(item, str) and keyword in item.lower():
+                    results.append((full, item))
+                elif isinstance(item, (dict, list)):
+                    results.extend(NetworkMonitor._deep_search(item, keyword, full))
+        return results
+
+    @staticmethod
+    def _truncate_val(val: str, max_len: int = 300) -> str:
+        if len(val) <= max_len:
+            return val
+        return val[:max_len] + "..."
+
     def get_record(self, api_id: int) -> dict | None:
         """Return the raw record dict for a given API ID.
 
