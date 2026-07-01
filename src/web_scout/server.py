@@ -26,14 +26,11 @@ WHAT IT DOES NOT DO:
 
 EXPECTED WORKFLOW:
   1. scout_open(url) → read page text first
-  2. AI reads text to decide if page is usable
-  3. scout_analyze() → capture APIs + scan DOM + extract embedded JSON (only when needed)
-  4. scout_list_apis() → see captured endpoints
-  5. scout_inspect_api(n) → view request params + response structure
+  2. scout_analyze() → capture ALL data: network APIs, SSR embedded JSON, DOM containers
+  3. scout_list_apis() → see all endpoints; [SSR] tag = embedded data (e.g. __INITIAL_STATE__)
+  4. scout_inspect_api(n) → view params + response structure
+  5. scout_inspect_api(n, "full") → see complete nested field tree
   6. scout_export(n) → save raw JSON + field documentation
-
-For DOM-heavy pages: scout_list_elements() → find containers → scout_inspect_dom()
-For quick verification: scout_fetch_api(url, path) — open + capture + return in one call.
 """)
 
 _response_dir = os.environ.get("RESPONSE_DIR", "./response")
@@ -111,11 +108,21 @@ def scout_open(url: str) -> str:
 @mcp.tool()
 def scout_analyze() -> str:
     """Analyze the current page: capture API endpoints, scan DOM containers,
-    and extract embedded JSON data from window globals.
+    and extract SSR-embedded JSON data from window globals and script tags.
 
-    Call this AFTER reading the page text from scout_open(). This starts
-    network monitoring, waits for API responses, scans the DOM for
-    repeated containers, and extracts SSR-embedded JSON data.
+    THIS IS THE PRIMARY DATA DISCOVERY TOOL. Always call it after scout_open().
+    It detects three types of data sources:
+
+    1. NETWORK APIs: XHR/Fetch requests captured by the browser listener.
+       Show as regular entries in list_apis (e.g. "GET /api/feed/rcmd").
+    
+    2. SSR EMBEDDED JSON: window.__INITIAL_STATE__, __NEXT_DATA__, __NUXT__,
+       <script type="application/json">, <script type="application/ld+json">.
+       Show as [SSR] entries in list_apis (e.g. "[SSR] window.__INITIAL_STATE__").
+       Zhihu, Next.js, Nuxt.js and other SSR sites embed data this way.
+    
+    3. DOM CONTAINERS: repeated HTML structures detected on the page.
+       Shown by scout_list_elements().
 
     Returns:
         Count of APIs, DOM containers, and embedded data sources found.
