@@ -192,7 +192,7 @@ def scout_analyze() -> str:
 
 
 @mcp.tool()
-def scout_action(action: str, value: str | None = None) -> str:
+def scout_action(action: str, value: str | None = None, container: str | None = None) -> str:
     """Execute an action on the page: search or scroll.
 
     SEARCH:
@@ -275,27 +275,40 @@ def scout_action(action: str, value: str | None = None) -> str:
             counts_snapshot = _monitor.get_count_snapshot() if _monitor else {}
 
             if value is None or value == "bottom":
-                _browser.tab.scroll.to_bottom()
-                desc = "bottom"
+                if container:
+                    _browser.tab.run_js(f"var el=document.querySelector('{container}');if(el)el.scrollTo(0,el.scrollHeight);")
+                else:
+                    _browser.tab.scroll.to_bottom()
+                desc = f"bottom (container: {container})" if container else "bottom"
             elif value == "top":
-                _browser.tab.scroll.to_top()
-                desc = "top"
+                if container:
+                    _browser.tab.run_js(f"var el=document.querySelector('{container}');if(el)el.scrollTo(0,0);")
+                else:
+                    _browser.tab.scroll.to_top()
+                desc = f"top (container: {container})" if container else "top"
             elif value == "down":
-                vp_height = _browser.tab.run_js("return window.innerHeight")
-                _browser.tab.scroll.down(vp_height)
-                desc = f"down {vp_height}px (1 viewport)"
+                vp = _browser.tab.run_js(f"var el=document.querySelector('{container}') if '{container}' else null;return el?el.clientHeight:window.innerHeight;")
+                if container:
+                    _browser.tab.run_js(f"var el=document.querySelector('{container}');if(el)el.scrollBy(0,{vp});")
+                else:
+                    _browser.tab.scroll.down(vp)
+                desc = f"down {vp}px{' (container)' if container else ''}"
             elif value == "up":
-                vp_height = _browser.tab.run_js("return window.innerHeight")
-                _browser.tab.scroll.up(vp_height)
-                desc = f"up {vp_height}px (1 viewport)"
+                vp = _browser.tab.run_js(f"var el=document.querySelector('{container}') if '{container}' else null;return el?el.clientHeight:window.innerHeight;")
+                if container:
+                    _browser.tab.run_js(f"var el=document.querySelector('{container}');if(el)el.scrollBy(0,-{vp});")
+                else:
+                    _browser.tab.scroll.up(vp)
+                desc = f"up {vp}px{' (container)' if container else ''}"
             elif value.lstrip("-").isdigit():
                 px = int(value)
-                if px >= 0:
+                if container:
+                    _browser.tab.run_js(f"var el=document.querySelector('{container}');if(el)el.scrollBy(0,{px});")
+                elif px >= 0:
                     _browser.tab.scroll.down(px)
-                    desc = f"down {px}px"
                 else:
                     _browser.tab.scroll.up(abs(px))
-                    desc = f"up {abs(px)}px"
+                desc = f"{'down' if px >= 0 else 'up'} {abs(px)}px{' (container)' if container else ''}"
             else:
                 return f"Unsupported scroll value: '{value}'. Use 'top', 'bottom', 'down', 'up', or pixel number."
 
@@ -392,6 +405,7 @@ def scout_list_apis(keyword: str | None = None) -> str:
     if not _monitor:
         return "No APIs captured yet. Call scout_analyze() first after scout_open()."
 
+    _monitor.flush()
     return _monitor.list_apis(keyword=keyword)
 
 
@@ -411,6 +425,8 @@ def scout_inspect_api(index: int, detail: str = "preview") -> str:
 
     if not _monitor:
         return "No APIs captured. Call scout_analyze() first after scout_open()."
+
+    _monitor.flush()
 
     record = _monitor.get_record(index)
     if not record:
@@ -503,6 +519,7 @@ def scout_search(keyword: str) -> str:
     if not _monitor:
         return "No data. Call scout_analyze() first after scout_open()."
 
+    _monitor.flush()
     lines = []
     # 1. JSON API 记录
     api_result = _monitor.list_apis(keyword=keyword)
@@ -511,7 +528,7 @@ def scout_search(keyword: str) -> str:
         lines.append(api_result)
         lines.append("")
 
-    # 2. 页面 HTML 源码（包含 __INITIAL_STATE__ 等）
+    # 2. 页面 HTML 源码
     if _browser:
         html = _browser.tab.html
         if keyword.lower() in html.lower():
@@ -538,26 +555,14 @@ def scout_search(keyword: str) -> str:
 
 @mcp.tool()
 def scout_context(keyword: str) -> str:
-    """Search all data sources for keyword, returning field paths and values.
-
-    Searches API responses, SSR embedded JSON, page meta tags, and DOM.
-    For each match, shows: source type, field path, and the actual value
-    containing the keyword. This is the tool to use when you want to know
-    WHERE a piece of data lives and what it looks like.
-
-    Args:
-        keyword: Text to search for across all data sources.
-
-    Returns:
-        Structured output showing source, field path, and value for each match.
-    """
+    """Search all data sources for keyword, returning field paths and values."""
     global _monitor, _browser, _dom
 
     if not _monitor:
         return "No data. Call scout_analyze() first after scout_open()."
 
     import json as _json
-
+    _monitor.flush()
     results = _monitor.find_context(keyword)
 
     # DOM 搜索

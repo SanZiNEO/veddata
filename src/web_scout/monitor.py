@@ -72,6 +72,12 @@ class NetworkMonitor:
                     new_packets.append(packet)
         return new_packets
 
+    def flush(self) -> int:
+        """Drain any queued packets without blocking. Returns count of new APIs."""
+        before = len(self.api_records)
+        self.step(timeout=0.1)
+        return len(self.api_records) - before
+
     def wait_new(self, timeout: float = 3.0) -> int:
         """Block until new JSON APIs are captured.
 
@@ -403,24 +409,39 @@ class NetworkMonitor:
         return None
 
     def _extract_from_html(self) -> dict:
-        """Extract SSR data from raw HTML source (bypasses JS window access)."""
-        import re as _re
+        """Extract SSR data from raw HTML source using brace counting."""
         html = self.tab.html
         results = {}
-        # 匹配 window.__XXX__ = {JSON};
         for name in ['__INITIAL_STATE__', '__NEXT_DATA__', '__NUXT__',
                      '__PRELOADED_STATE__', '__APP_DATA__', '__ASYNC_DATA__']:
-            pattern = rf'window\.{_re.escape(name)}\s*=\s*(\{{.+?\}});'
-            matches = _re.findall(pattern, html, _re.DOTALL)
-            if not matches:
+            marker = f'window.{name} = '
+            pos = html.find(marker)
+            if pos == -1:
+                # 也找 window['__INITIAL_STATE__'] 格式
+                marker = f"window['{name}'] = "
+                pos = html.find(marker)
+            if pos == -1:
                 continue
-            # 取最长匹配（嵌套 JSON 可能被 +? 截断，多次拼接）
-            text = matches[-1] if matches else ""
+            pos += len(marker)
+            if pos >= len(html) or html[pos] != '{':
+                continue
+            depth = 0
+            end = pos
+            for i in range(pos, len(html)):
+                if html[i] == '{':
+                    depth += 1
+                elif html[i] == '}':
+                    depth -= 1
+                    if depth == 0:
+                        end = i + 1
+                        break
+            text = html[pos:end]
             if len(text) < 20:
                 continue
             try:
                 data = json.loads(text)
-                results[name] = data
+                if isinstance(data, dict) and len(data) >= 2:
+                    results[name] = data
             except json.JSONDecodeError:
                 pass
         return results
