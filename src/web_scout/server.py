@@ -68,8 +68,8 @@ def scout_open(url: str) -> str:
         if not login.is_login_required():
             _login_pending = False
         else:
-            return ("登录未完成，请在浏览器中手动登录，然后调用 scout_wait_login()。\n"
-                    "如果要换目标页面，先调用 scout_close() 关闭当前会话。")
+            return ("⛔ 登录未完成。请先在浏览器中手动登录知乎/微博等网站，完成后调用 scout_wait_login()。\n"
+                    "注意：在登录完成前，不要调用任何其他 web-scout 工具。")
 
     _monitor = None
     _dom = None
@@ -93,8 +93,8 @@ def scout_open(url: str) -> str:
         text = _browser.get_text()
         return (f"页面已打开: {title}\n\n"
                 f"=== 页面文本 ===\n{text}\n\n"
-                f"⚠️ 此页面需要登录。登录后可获取完整 cookies 和更多 API 端点。\n"
-                f"请在浏览器中手动登录，然后调用 scout_wait_login() 继续。")
+                f"⛔ 此页面需要登录。请先在浏览器中手动登录，完成后调用 scout_wait_login()。\n"
+                f"⚠️ 登录完成前不要调用 scout_analyze / scout_action / scout_list_apis 等工具。")
 
     lines = [
         f"Page opened: {result['title'] or url}",
@@ -133,7 +133,7 @@ def scout_analyze() -> str:
         return "Error: call scout_open first."
 
     if _login_pending:
-        return "Error: call scout_wait_login() first."
+        return "⛔ 登录未完成。请先让用户在浏览器中登录，然后调用 scout_wait_login()。登录完成前不要调用此工具。"
 
     import time
     time.sleep(3)
@@ -192,7 +192,7 @@ def scout_action(action: str, value: str | None = None) -> str:
         return "Error: call scout_open first."
 
     if _login_pending:
-        return "Error: call scout_wait_login() first."
+        return "⛔ 登录未完成。请先让用户在浏览器中登录，然后调用 scout_wait_login()。登录完成前不要调用此工具。"
 
     if action == "search" and value:
         try:
