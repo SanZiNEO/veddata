@@ -39,23 +39,30 @@ WHAT IT DOES NOT DO:
 
 RECOMMENDED WORKFLOW:
 
-  Phase 1 — Explore:
+  Fast Path (recommended — open → search → context):
+    1. scout_open(url)              → read page text, pick a visible keyword
+    2. scout_act("scroll")          → trigger lazy-load / feed APIs (recommendation, timeline)
+    3. scout_search(keyword)        → find which API has this keyword in its response body
+    4. scout_context(keyword)       → see exact field path (e.g. data.item[0].title = "...")
+    → If API hit: scout_inspect(n) → request params + response structure → scout_export(n)
+
+    Example (bilibili):
+      scout_open → picks "男人领域" from text
+      scout_act("scroll") → +11 APIs, hits feed/rcmd
+      scout_search("男人领域") → [51] GET feed/rcmd
+      scout_context("男人领域") → data.item[0].title = "男人领域"
+      → Target confirmed: feed/rcmd is the recommendation API
+
+    This skips scan/apis enumeration; search+context pinpoint the exact API+field directly.
+
+  Full Scan (when you do not have a keyword yet):
     1. scout_open(url)              → read rendered page text, identify keywords
     2. scout_fetch()                → get full text + all links (JS-heavy SPA pages)
     3. scout_act("search", kw)      → trigger search APIs with keywords from step 1-2
-    4. scout_act("scroll")          → trigger lazy-load / infinite-scroll APIs
-
-  Phase 2 — Analyze:
-    5. scout_scan(mode="all")       → capture ALL data: network APIs + SSR JSON + DOM containers
-    6. scout_apis()                 → see all endpoints; [SSR] tag = embedded data
-    7. scout_search(keyword)        → find which API/SSR/DOM has your target data
-    8. scout_context(keyword)       → see exact field paths and sample values for matches
-
-  Phase 3 — Inspect & Export:
-    9. scout_inspect(n)             → view request params + response structure
-   10. scout_inspect(n, "full")     → see complete nested field tree
-   11. scout_export(n)              → save raw JSON + field documentation
-   12. scout_export_all()           → batch-export all captured APIs at once
+    4. scout_scan(mode="all")       → capture ALL data: network APIs + SSR JSON + DOM containers
+    5. scout_apis()                 → see all endpoints; [SSR] tag = embedded data
+    6. scout_inspect(n)             → view request params + response structure
+    7. scout_export(n)              → save raw JSON + field documentation
 
   Interactive Scenarios:
    - scout_elements()               → see clickable elements and DOM containers
@@ -67,6 +74,10 @@ RECOMMENDED WORKFLOW:
   Quick Utilities:
    - scout_scan(mode="dom", keyword="...")    → keyword-targeted DOM scan
    - scout_peek(url, path_contains="...")     → one-shot API discovery, no session
+
+  SSR Pages (dxy.com, static HTML):
+    Data is in HTML/DOM, not XHR. Use scout_search + scout_scan(mode="dom") instead.
+    scout_apis() will return 0 - that is expected.
 
 FETCH RULE: For JS-rendered pages (bilibili, xiaohongshu, zhihu, SPA), use scout_fetch() —
 it captures browser-rendered text that HTTP-based fetch tools cannot see. For static

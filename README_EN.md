@@ -28,12 +28,12 @@ For standard HTTP JSON API sites. Not for encrypted streams, wasm obfuscation, o
 ```
 Website → Browser → Full-page text (Markdown)
        ↓           ↓
-  Network listen  AI reads text → picks keywords
+   Network listen  AI reads text → picks keywords
        ↓           ↓
-  API capture     Search → match APIs containing keywords
+   API capture     Search → match APIs containing keywords
        ↓               ↓
-  Field docs ←────────┘
-  Raw data packets saved to disk
+   Field docs ←────────┘
+   Raw data packets saved to disk
 ```
 
 ## Quick Start
@@ -69,104 +69,110 @@ Optional env vars:
 | `USER_DATA_DIR` | (temp) | Persistent profile for login state |
 | `LOGIN_TIMEOUT` | `"300"` | Max login wait in seconds |
 | `MAX_TEXT_LENGTH` | `"3000"` | Max characters for scout_open page text |
-| `AUTO_CLOSE` | `"true"` | Auto-close browser after export (`"false"` keeps it open) |
 | `RESPONSE_DIR` | `"./response"` | Export output directory |
 
-## Tools
+## Tools (19)
 
-18 tools total, grouped by workflow phase:
-
-### Explore
+### Navigate (5)
 | Tool | Description |
 |------|-------------|
 | `scout_open` | Open URL → extract rendered text → start network monitor |
-| `scout_fetch` | Get full page text + all links (supports chunked reading) |
-| `scout_action` | Execute search or scroll to trigger new API requests |
-| `scout_wait_login` | Wait for manual login in browser window |
+| `scout_close` | Close entire browser, clear all data |
+| `scout_tabs` | List all tabs, mark current active |
+| `scout_tab_switch` | Switch to a specified tab |
+| `scout_tab_close` | Close a tab, clean up its monitor data |
 
-### Analyze
+### Observe (3)
 | Tool | Description |
 |------|-------------|
-| `scout_analyze` | **Core analysis tool**: capture network APIs + SSR JSON + DOM containers in one call |
-| `scout_list_apis` | List captured API endpoints, with optional keyword filter |
+| `scout_fetch` | Get full page text + all links (supports chunked reading) |
+| `scout_screenshot` | Screenshot of current page (viewport or full page) |
+| `scout_elements` | List clickable elements and DOM containers |
+
+### Act (3)
+| Tool | Description |
+|------|-------------|
+| `scout_act` | Execute search or scroll to trigger new API requests |
+| `scout_click` | Click an element (pagination / tab switch / load more) |
+| `scout_login` | Wait for manual login in browser window |
+
+### Discover (7)
+| Tool | Description |
+|------|-------------|
+| `scout_apis` | List captured API endpoints, with optional keyword filter |
+| `scout_inspect` | Show full request/response for an API (preview or full mode) |
 | `scout_search` | Global search: API bodies → SSR JSON → page source → DOM text |
 | `scout_context` | Search keyword and return exact field paths + sample values |
-
-### Inspect & Export
-| Tool | Description |
-|------|-------------|
-| `scout_inspect_api` | Show full request/response for an API (preview or full mode) |
 | `scout_export` | Export single API: compressed field doc + raw JSON |
 | `scout_export_all` | Batch-export all captured APIs at once |
+| `scout_peek` | Open → listen → match API by path → return details in one call |
 
-### Interaction
+### Scan (1)
 | Tool | Description |
 |------|-------------|
-| `scout_list_elements` | List clickable elements and DOM containers |
-| `scout_click` | Click an element (pagination / tab switch / load more) |
-| `scout_screenshot` | Screenshot of current page (viewport or full page) |
-| `scout_list_tabs` | List all open browser tabs |
-| `scout_close` | Close a specific tab or current tab |
-
-### One-shot Verification
-| Tool | Description |
-|------|-------------|
-| `scout_fetch_api` | Open → listen → match API by path → return details in one call |
-| `scout_inspect_dom` | Open → scan DOM containers by keyword → return in one call |
+| `scout_scan` | `mode="all"` full scan (API + SSR + DOM). `mode="dom"` keyword scan |
 
 ## Recommended Workflow
 
-### Scenario 1: Discovering Page Data Sources
+### 🚀 Fast Path (Recommended)
 
+```bash
+# 1. Open page, pick a visible keyword from text
+scout_open("https://www.bilibili.com")
+→ page text: 原神 男人领域 鬼畜 …
+
+# 2. Scroll to trigger more APIs (recommendation/feed)
+scout_act("scroll")
+→ +11 APIs, hits feed/rcmd endpoint
+
+# 3. Search by keyword to find which API contains it
+scout_search("男人领域")
+→ [51] GET feed/rcmd  ← hit!
+
+# 4. See exact field path and value
+scout_context("男人领域")
+→ data.item[0].title = "男人领域"
+
+# 5. Confirm target, inspect params, export
+scout_inspect(51)
+scout_export(51)
 ```
-AI: scout_open("https://xiaohongshu.com/explore")
-→ "Page text: 减脂餐 健身计划 OOTD …"
 
-AI: scout_action("search", "减脂餐")
-→ "2 new APIs captured"
+**Key insight**: skip enumeration (scan/apis), go directly from keyword → search → context to pinpoint the exact API and field. Much faster than "full scan → inspect one by one".
 
-AI: scout_analyze()
-→ 3 network APIs + 1 SSR source + 2 DOM containers
+### Full Scan (when you do not have a keyword)
 
-AI: scout_list_apis()
-→ [1] POST /api/search/notes  → 20 fields
-→ [2] [SSR] window.__INITIAL_STATE__ → 156 fields
-
-AI: scout_inspect_api(1)
-→ POST https://edith.xiaohongshu.com/api/search/notes
-   Body: {"keyword": "减脂餐", "page": 1, ...}
-   Response: code=0, data.items[]: count=20, id=..., title=...
-
-AI: scout_export(1)
-→ field docs + saved: response/search_notes.json
+```bash
+scout_open(url)
+scout_act("search", kw)      # trigger search APIs
+scout_scan(mode="all")       # full scan
+scout_apis()                 # list all endpoints
+scout_inspect(n)             # inspect one by one
+scout_export(n)
 ```
 
-### Scenario 2: Pagination / Infinite Scroll Discovery
+### SSR Pages (dxy.com, etc.)
 
-```
-AI: scout_action("scroll")
-→ 3 new, 1 recurring, 5 total APIs
-
-AI: scout_list_apis()
-→ [3] GET /api/feed/rcmd ×2 — paginated
-
-AI: scout_list_elements()
-→ [1] a "下一页"  [2] [role=tab] "最新"
-
-AI: scout_click(1)
-→ triggered 1 new API: GET /api/search?page=2
-```
+Data is in HTML/DOM, not XHR. Use `scout_search` + `scout_scan(mode="dom")` instead.
+`scout_apis()` returning 0 is expected behavior.
 
 ## Architecture
 
 ```
 src/web_scout/
-├── server.py      # FastMCP entry + 18 tools
-├── browser.py     # Chromium wrapper + text extraction + multi-tab management
-├── monitor.py     # Network listener + JSON API filter + SSR extraction + query
-├── dom.py         # Element scanner + container discovery + field extraction
-├── export.py      # Compressed field docs + raw packet save
-└── login.py       # Login detection + manual login wait + CAPTCHA handling
+├── server.py           # FastMCP entry + 19 tools
+├── state.py            # Global state + multi-tab isolation
+├── browser.py          # Chromium wrapper + text extraction + multi-tab management
+├── monitor.py          # Network listener + JSON API filter + SSR extraction + query
+├── dom.py              # Element scanner + container discovery + field extraction
+├── export.py           # Compressed field docs + raw packet save
+├── login.py            # Login detection + manual login wait + CAPTCHA handling
+└── tools/
+    ├── navigate.py     # Navigate: open close tabs tab_switch tab_close
+    ├── observe.py      # Observe: fetch screenshot elements
+    ├── act.py          # Act: act click login
+    ├── discover.py     # Discover: apis inspect search context export export_all peek
+    └── scan.py         # Scan: scan
 ```
 
 ## License
