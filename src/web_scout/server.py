@@ -974,20 +974,22 @@ def scout_fetch(max_length: int = 5000, start_index: int = 0) -> str:
     try:
         raw = _browser.tab.run_js("""
         (function() {
-            var links = document.querySelectorAll('a[href]');
+            var els = document.querySelectorAll('a[href]');
             var arr = [];
-            for (var i = 0; i < links.length && arr.length < 100; i++) {
-                var h = links[i].href;
+            for (var i = 0; i < els.length && arr.length < 100; i++) {
+                var h = els[i].href;
                 if (!h || h.indexOf('javascript:') === 0) continue;
-                var t = (links[i].textContent || '').trim().substring(0, 80);
+                var t = (els[i].textContent || '').trim().substring(0, 80);
                 if (!t) t = h.substring(0, 80);
                 arr.push(t + ' -> ' + h);
             }
             return JSON.stringify(arr);
         })()
         """)
-        if raw and isinstance(raw, str):
+        if isinstance(raw, str) and raw.startswith('['):
             links = _json.loads(raw)
+    except Exception:
+        links = []
     except Exception:
         links = []
 
