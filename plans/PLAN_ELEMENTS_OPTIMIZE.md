@@ -1,5 +1,7 @@
 # scout_elements — 容器发现 + 常见元素算法（v3）
 
+> **先监听, 再导航**：DrissionPage 的 `listen.start()` 必须在触发请求的动作之前调用，否则该动作产生的数据包无法捕获。`scout_elements` 本身是只读扫描，不触发请求，但配合 `scout_act` 使用时需遵循此原则。
+
 ## 1. 当前代码方案（`dom.py`）
 
 ### list_elements() — 交互元素发现

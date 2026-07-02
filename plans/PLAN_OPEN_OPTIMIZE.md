@@ -1,5 +1,7 @@
 # scout_open Fetch 优化计划
 
+> **先监听, 再导航**：DrissionPage 的 `listen.start()` 必须在触发请求的动作之前调用，否则该动作产生的数据包无法捕获。`scout_open` 需要捕获页面初始加载的 API 请求，监听器必须在 `browser.open(url)` 之前启动。
+
 ## 目标
 
 优化 `scout_open` 的页面信息输出，用 AXTree 替代纯 innerText，单次 open 同时获得页面文本和可交互元素。
@@ -52,7 +54,6 @@ def _ax_summary(tab) -> str:
         if not name or len(name) < 2:
             continue
         role = n.get('role', {}).get('value', '')
-        # Get URL for links
         url = ''
         for p in n.get('properties', []):
             if p.get('name') == 'url':
@@ -68,9 +69,8 @@ def _ax_summary(tab) -> str:
 ### scout_open 改动
 
 ```python
-# 替换原有的纯文本返回
-text = result["text"]                                     # innerText（保留）
-elements = _ax_summary(state._browser.get_current_tab())  # AXTree（新增）
+text = result["text"]
+elements = _ax_summary(state._browser.get_current_tab())
 
 return "\n".join([
     state.prefix(tab_num),
@@ -116,30 +116,94 @@ DrissionPage 的默认行为：程序结束时浏览器不会主动关闭。MCP 
 | `browser.reconnect()` | 断开并重新连接浏览器 |
 | `ChromiumOptions().new_env()` | 强制启动全新浏览器（关闭旧进程） |
 
-### 修复方案
+### 方案：scout_open 新增 `reuse` 参数
 
-`scout_open` 调用时检测并清理残留浏览器，然后重建 `BrowserSession`：
+`scout_open` 新增可选参数 `reuse: bool = False`，控制是否复用已有的浏览器 session。
+
+| `reuse` | 行为 | 适用场景 |
+|---------|------|---------|
+| `False`（默认） | `new_env()` 关闭旧进程，启动全新浏览器 | 防止跨 MCP session 串数据 |
+| `True` | 附到已有浏览器，保留登录态和标签页 | 同一 session 内复用（调试/连跑） |
+
+### 工具签名
 
 ```python
-def scout_open(url: str) -> str:
-    # ① 检测并清理接管来的旧浏览器
-    if state._browser and state._browser._browser:
-        if state._browser._browser.states.is_existed:
-            state._browser._browser.quit(timeout=3, force=True)
-            state._browser = None
-    # ② 正常流程继续...
-    if not state._browser:
-        state._browser = BrowserSession()
+@state.mcp.tool()
+def scout_open(url: str, reuse: bool = False) -> str:
 ```
 
-`BrowserSession()` 重建后 `_tabs = {}`、`_monitors` 在 scout_close 或首次 open 时也重建。
+### 实现流程
+
+```python
+@state.mcp.tool()
+def scout_open(url: str, reuse: bool = False) -> str:
+    # ① 清理接管来的旧浏览器（除非明确要复用）
+    if not reuse:
+        if state._browser and state._browser._browser:
+            try:
+                if state._browser._browser.states.is_existed:
+                    state._browser._browser.quit(timeout=3, force=True)
+            except Exception:
+                pass
+            state._browser = None
+            state._monitors.clear()
+            state._dom_scanners.clear()
+            state._login = None
+            state._login_pending = False
+
+    # ② 正常流程
+    if not state._browser:
+        state._browser = BrowserSession(force_new=not reuse)
+
+    monitor = NetworkMonitor(state._browser.get_current_tab())
+    monitor.start()
+    # ... 导航、等待、返回 AXTree 输出
+```
+
+### BrowserSession 改动
+
+```python
+class BrowserSession:
+    def __init__(self, force_new: bool = False):
+        self._browser: Chromium | None = None
+        self._tabs: dict[str, dict] = {}
+        self._current_tab: str | None = None
+        self._next_tab_num: int = 1
+        self._force_new = force_new    # <-- 新增
+
+    def _ensure_browser(self) -> Chromium:
+        if not self._force_new and self._browser and self._browser.states.is_alive:
+            return self._browser
+
+        # ... 原有端口扫描逻辑 ...
+
+        if self._force_new:
+            co = ChromiumOptions().new_env()   # 关闭旧进程 + 全新启动
+        else:
+            co = ChromiumOptions().set_local_port(p)  # 附到已有或启动新的
+
+        self._browser = Chromium(co)
+        return self._browser
+```
 
 ### 改动范围
 
-- 改 `tools/navigate.py` 的 `scout_open`，在第一步加清理
+| 文件 | 改动 |
+|------|------|
+| `tools/navigate.py` | 新增 `_ax_summary()` + `scout_open` 改签名 + 清理逻辑 |
+| `browser.py` | `BrowserSession.__init__` 接受 `force_new` 参数 |
+| `browser.py` | `_ensure_browser()` 分支使用 `new_env()` |
 
-## 影响
+### 影响
 
-- 改 `tools/navigate.py`，新增 `_ax_summary()` 函数 + `scout_open` 首步清理逻辑
+- 改 `tools/navigate.py` 和 `browser.py`
 - 0 新依赖，0 新文件，0 新环境变量
-- 不删除 `scout_fetch` 和 `scout_elements`（保留供深度使用）
+- `reuse=False` 向后兼容（旧行为会多杀一次旧进程，但结果一致）
+- `reuse=True` 保留现有行为不变（附到已有浏览器）
+
+### 验证步骤
+
+1. `scout_open("https://www.bilibili.com")` — 默认 `reuse=False`，启动全新浏览器
+2. 关闭 MCP / 断开连接，再 `scout_open("...")` — `new_env()` 关掉旧进程，打开新的
+3. `scout_open("...", reuse=True)` — 附到已有浏览器，不重置状态
+4. 验证 `tab_ids` 和 `_tabs` 同步（不在测试覆盖时出现 `_tabs=2, tab_ids=7`）

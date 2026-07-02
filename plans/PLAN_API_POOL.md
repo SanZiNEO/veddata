@@ -1,5 +1,7 @@
 # API 公共池架构改造计划
 
+> **先监听, 再导航**：DrissionPage 的 `listen.start()` 必须在触发请求的动作之前调用，否则该动作产生的数据包无法捕获。API Pool 负责管理监听器生命周期，但启动监听必须在导航/交互之前。
+
 ## 动机
 
 当前架构每个 tab 一个 `NetworkMonitor`，存在三个问题：
@@ -114,6 +116,24 @@ _current_tab: str | None = None           # 当前活跃 tab 的 CDP ID
 | `_dom_scanners[tab_num]` | `_dom_scanners[tab_id]` |
 | `_browser.tab_num()` | `_browser.current_tab_id()` |
 | `BrowserSession._tabs[tid]["num"]` | 字段删除 |
+
+### 短 ID 匹配规则
+
+所有接受 tab 参数的接口（`scout_apis`、`scout_inspect`、`scout_tab_switch` 等）按**前缀匹配**定位标签页：
+
+```python
+def resolve_tab_id(short_id: str) -> str | None:
+    """短 ID 前缀匹配 → 完整 CDP tab_id."""
+    if not state._browser:
+        return None
+    browser = state._browser._browser
+    for tid in browser.tab_ids:
+        if tid.startswith(short_id):
+            return tid
+    return None
+```
+
+显示用前 8 位，查找用前缀——AI 传入 `5F207A5F` 也能定位到完整的 `5F207A5F-XXXX-...`。
 
 ### GC 策略
 

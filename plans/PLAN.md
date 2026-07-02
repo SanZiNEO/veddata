@@ -1,5 +1,7 @@
 # Web Scout 轻量调试工具计划
 
+> **先监听, 再导航**：DrissionPage 的 `listen.start()` 必须在触发请求的动作之前调用，否则该动作产生的数据包无法捕获。所有涉及页面交互或请求捕获的操作都遵循此原则。
+
 ## 目录
 
 1. [scout_request — 快速请求调试](#1-scout_request)
@@ -36,7 +38,7 @@ scout_request(
     params: str = "",         # JSON 字符串，覆盖/追加请求参数
     body: str = "",           # JSON 字符串，POST/PUT/PATCH 请求体
     headers: str = "",        # JSON 字符串，覆盖/追加请求头
-    tab: int = 0,             # 哪个 Tab 拿 cookie
+    tab: str = "",            # 标签页短 ID（空=当前页）
 )
 ```
 
@@ -85,7 +87,7 @@ AI 在发 `scout_request` 前需要确认登录态有效。
 scout_cookies(
     all_domains: bool = False,  # False=仅当前域名，True=所有域名
     all_info: bool = False,     # False=仅 name/value/domain，True=含 path/httpOnly/secure/expires
-    tab: int = 0,               # 查看哪个 Tab 的 cookie
+    tab: str = "",              # 标签页短 ID（空=当前页）
 )
 ```
 
@@ -217,14 +219,14 @@ def _scan_common_elements(tab) -> str:
 
 ## 工具总数变化
 
-| 文件 | 现 | 增 | 后 |
-|------|:--:|:--:|:--:|
-| navigate.py | 5 | 0 | 5 |
-| observe.py | 3 | +1 (cookies) | 4 |
-| act.py | 3 | 0 | 3 |
-| discover.py | 7 | +1 (request) | 8 |
-| scan.py | 1 | 0 | 1 |
-| **合计** | **19** | **+2** | **21** |
+| 文件 | 现 | 增 | 减 | 后 |
+|------|:--:|:--:|:--:|:--:|
+| navigate.py | 5 | 0 | 0 | 5 |
+| observe.py | 3 | +1 (cookies) | 0 | 4 |
+| act.py | 3 | 0 | −1 (scout_click) | 2 |
+| discover.py | 7 | +1 (request) | 0 | 8 |
+| scan.py | 1 | 0 | 0 | 1 |
+| **合计** | **19** | **+2** | **−1** | **20** |
 
 新增文件：`src/web_scout/requester.py`
 

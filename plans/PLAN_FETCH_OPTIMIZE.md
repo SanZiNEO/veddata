@@ -1,5 +1,7 @@
 # scout_fetch 全量获取优化计划
 
+> **先监听, 再导航**：DrissionPage 的 `listen.start()` 必须在触发请求的动作之前调用，否则该动作产生的数据包无法捕获。`scout_fetch` 的滚动到底操作可能触发懒加载 API，监听器必须在滚动前已启动。
+
 ## 目标
 
 `scout_fetch` 从"再输出一遍 open 内容+链接列表"改为真正的全量 dump：
@@ -61,8 +63,8 @@ Title: 哔哩哔哩
 
 ### 临时文件
 
-- 路径：`{RESPONSE_DIR}/fetch_{tab_number}.txt`
-- 内容：全量 innerText（collapsed whitespace）+ 链接位置 JSON
+- 路径：`{RESPONSE_DIR}/fetch_{tab_id}.json`
+- 内容：全量 innerText + 链接位置 JSON
 - 每次调用覆盖（同一 tab），tab 关闭时清理
 - 不占 AI 上下文，AI 通过 `start_index` 分段读
 
@@ -72,7 +74,7 @@ Title: 哔哩哔哩
 |------|------|------|
 | `max_length` | 5000 | 每段最大字符数 |
 | `start_index` | 0 | 起始字符位置 |
-| `tab` | 0 | 目标标签页 |
+| `tab` | "" | 目标标签页短 ID（空=当前页） |
 
 ---
 
