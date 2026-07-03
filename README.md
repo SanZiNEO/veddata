@@ -71,41 +71,43 @@ pip install -e .
 | `MAX_TEXT_LENGTH` | `"3000"` | scout_open 页面文本最大字符数 |
 | `RESPONSE_DIR` | `"./response"` | 数据导出默认目录，可用 `output_dir` 参数覆盖 |
 
-## 工具（19 个）
+## 工具（21 个）
 
-### 导航（5 个）
+### 导航（6 个）
 | 工具 | 说明 |
 |------|------|
-| `scout_open` | 打开页面 → 提取渲染文本 → 开始监听网络 |
+| `scout_open` | 启动/接管 Chromium，清空旧标签页。不导航 |
+| `scout_goto` | 导航到 URL，监听 API，返回页面文本 + 元素 + API 摘要。支持 `new_tab` 参数 |
 | `scout_close` | 关闭整个浏览器，清空所有数据 |
 | `scout_tabs` | 列出所有标签页，标注当前活跃 |
-| `scout_tab_switch` | 切换到指定标签页 |
-| `scout_tab_close` | 关闭指定标签页，清理其监控数据 |
+| `scout_tab_switch` | 切换到指定标签页（短 ID 前缀匹配） |
+| `scout_tab_close` | 关闭指定标签页，清理其 API 记录。支持逗号分隔批量关闭 |
 
-### 观察（3 个）
+### 观察（4 个）
 | 工具 | 说明 |
 |------|------|
-| `scout_fetch` | 获取当前页面完整文本 + 所有链接列表（支持分块读取） |
+| `scout_fetch` | 滚动到底 → 全量 innerText + AXTree 链接 → 缓存文件 → 分段读取 |
 | `scout_screenshot` | 截取当前页面（可视区域或整页） |
-| `scout_elements` | 列出可交互元素和 DOM 容器 |
+| `scout_elements` | 可交互元素 + DOM 容器 v3 + Common Actions |
+| `scout_cookies` | 查看 cookie（当前域或全部，摘要或完整信息）。指定 tab 获取对应标签页 |
 
-### 交互（3 个）
+### 交互（2 个）
 | 工具 | 说明 |
 |------|------|
-| `scout_act` | 在页面执行搜索或滚动，触发新的 API 请求 |
-| `scout_click` | 点击指定元素（翻页/切换 tab/加载更多） |
-| `scout_login` | 等待用户在浏览器中手动登录 |
+| `scout_act` | 链式操作（input/scroll/click/select），每步报告新增 API method + path |
+| `scout_login` | 等待用户在浏览器中手动登录，通过 cookie 变化检测 |
 
-### 发现（7 个）
+### 发现（8 个）
 | 工具 | 说明 |
 |------|------|
-| `scout_apis` | 列出所有捕获的 API 端点，支持关键词过滤 |
+| `scout_apis` | 列出所有捕获的 API 端点，支持关键词和 tab 过滤 |
 | `scout_inspect` | 查看 API 的完整请求/响应，支持逗号分隔多 ID |
-| `scout_search` | 全局搜索：API 响应体 → SSR JSON → 页面源码 → DOM，支持逗号分隔多关键词 |
+| `scout_search` | 全局搜索：API 响应体 → 页面源码 → DOM，支持逗号分隔多关键词 |
 | `scout_context` | 搜索关键词返回精确字段路径 + 采样值，支持逗号分隔多关键词 |
 | `scout_export` | 导出 API：字段文档 + 原始 JSON，支持逗号分隔多 ID，`output_dir` 指定目录 |
 | `scout_export_all` | 批量导出所有已捕获的 API |
 | `scout_peek` | 打开页面 → 监听 → 按路径匹配 API → 一步返回详情 |
+| `scout_request` | 重放 HTTP 请求（复用捕获参数或自定义），自动同步浏览器 cookie |
 
 ### 扫描（1 个）
 | 工具 | 说明 |
@@ -118,7 +120,7 @@ pip install -e .
 
 从页面文本中选一个关键词，直接反查数据来源：
 
-1. `scout_open(url)` — 打开页面，浏览渲染文本，选关键词（可多个）
+1. `scout_open()` → `scout_goto(url)` — 启动浏览器 → 导航到页面，浏览渲染文本，选关键词（可多个）
 2. `scout_act("scroll")` — 滚动加载，触发推荐/动态流等接口
 3. `scout_search("词1,词2")` — 用关键词反查，看哪些 API 的响应体里有它们
 4. `scout_context("词1,词2")` — 看精确字段路径和值，确认目标
@@ -130,7 +132,7 @@ pip install -e .
 
 完全没有方向时，先看页面有哪些数据源：
 
-1. `scout_open(url)` → `scout_act("search", kw)` — 触发搜索接口
+1. `scout_open()` → `scout_goto(url)` → `scout_act("search", kw)` — 触发搜索接口
 2. `scout_scan(mode="all")` — 一次性抓 API + DOM 容器 + SSR 数据
 3. `scout_apis()` — 列出所有端点，逐个 `scout_inspect(n)`
 
@@ -142,18 +144,19 @@ pip install -e .
 
 ```
 src/web_scout/
-├── server.py           # FastMCP 入口 + 19 个工具
-├── state.py            # 全局状态 + 多标签页隔离
-├── browser.py          # Chromium 封装 + 文本提取 + 多标签管理
-├── monitor.py          # 网络监听 + JSON API 过滤 + SSR 提取 + 查询
-├── dom.py              # 元素扫描 + 容器发现 + 字段提取
+├── server.py           # FastMCP 入口 + 21 个工具
+├── state.py            # 全局状态 + _api_pool + _dom_scanners
+├── browser.py          # Chromium 封装 + CDP tab_id 管理 + 前缀匹配
+├── network_pool.py     # API 公共池 + 按 tab_id 过滤 + 字段压缩
+├── requester.py        # SessionPage 请求执行器 + cookie 同步
+├── dom.py              # 元素扫描 + 容器发现 v3 + Common Actions
 ├── export.py           # 压缩字段文档 + 原始数据包保存
-├── login.py            # 登录检测 + 手动登录等待 + 验证码处理
+├── login.py            # cookie 变化检测登录 + 手动登录等待
 └── tools/
-    ├── navigate.py     # 导航: open close tabs tab_switch tab_close
-    ├── observe.py      # 观察: fetch screenshot elements
-    ├── act.py          # 交互: act click login
-    ├── discover.py     # 发现: apis inspect search context export export_all peek
+    ├── navigate.py     # 导航: open goto close tabs tab_switch tab_close
+    ├── observe.py      # 观察: fetch screenshot elements cookies
+    ├── act.py          # 交互: act login
+    ├── discover.py     # 发现: apis inspect search context export export_all peek request
     └── scan.py         # 扫描: scan
 ```
 

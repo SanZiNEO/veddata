@@ -71,41 +71,43 @@ Optional env vars:
 | `MAX_TEXT_LENGTH` | `"3000"` | Max characters for scout_open page text |
 | `RESPONSE_DIR` | `"./response"` | Default export directory, overridable by `output_dir` param |
 
-## Tools (19)
+## Tools (21)
 
-### Navigate (5)
+### Navigate (6)
 | Tool | Description |
 |------|-------------|
-| `scout_open` | Open URL → extract rendered text → start network monitor |
+| `scout_open` | Launch/attach Chromium on port 9222, clear old tabs. No navigation |
+| `scout_goto` | Navigate to URL, capture APIs, return page text + elements + API summary. Supports `new_tab` |
 | `scout_close` | Close entire browser, clear all data |
-| `scout_tabs` | List all tabs, mark current active |
-| `scout_tab_switch` | Switch to a specified tab |
-| `scout_tab_close` | Close a tab, clean up its monitor data |
+| `scout_tabs` | List all tabs with CDP short IDs |
+| `scout_tab_switch` | Switch to a specified tab (short ID prefix match) |
+| `scout_tab_close` | Close tab(s) by short ID, prune API records. Comma-separated for batch close |
 
-### Observe (3)
+### Observe (4)
 | Tool | Description |
 |------|-------------|
-| `scout_fetch` | Get full page text + all links (supports chunked reading) |
+| `scout_fetch` | Scroll to bottom → full innerText + AXTree links → cache file → chunked read |
 | `scout_screenshot` | Screenshot of current page (viewport or full page) |
-| `scout_elements` | List clickable elements and DOM containers |
+| `scout_elements` | Interactive elements + DOM containers v3 + Common Actions |
+| `scout_cookies` | View cookies (current domain or all, summary or full info). Filter by tab |
 
-### Act (3)
+### Act (2)
 | Tool | Description |
 |------|-------------|
-| `scout_act` | Execute search or scroll to trigger new API requests |
-| `scout_click` | Click an element (pagination / tab switch / load more) |
-| `scout_login` | Wait for manual login in browser window |
+| `scout_act` | Chain operations (input/scroll/click/select), reports new API method+path per step |
+| `scout_login` | Wait for manual login via cookie change detection |
 
-### Discover (7)
+### Discover (8)
 | Tool | Description |
 |------|-------------|
-| `scout_apis` | List captured API endpoints, with optional keyword filter |
+| `scout_apis` | List captured API endpoints, filter by keyword or tab |
 | `scout_inspect` | Show request/response for APIs, supports comma-separated IDs |
-| `scout_search` | Global search: API bodies → SSR JSON → page source → DOM, supports comma-separated keywords |
+| `scout_search` | Global search: API bodies → page source → DOM, supports comma-separated keywords |
 | `scout_context` | Search keyword returning field paths + values, supports comma-separated keywords |
 | `scout_export` | Export APIs: field doc + raw JSON, supports comma-separated IDs and `output_dir` |
 | `scout_export_all` | Batch-export all captured APIs at once |
 | `scout_peek` | Open → listen → match API by path → return details in one call |
+| `scout_request` | Replay HTTP requests (captured or custom), auto-sync browser cookies |
 
 ### Scan (1)
 | Tool | Description |
@@ -118,7 +120,7 @@ Optional env vars:
 
 Pick a visible keyword from page text and trace it directly to the API:
 
-1. `scout_open(url)` — open page, read rendered text, pick keywords (can be multiple)
+1. `scout_open()` → `scout_goto(url)` — launch browser → navigate, read rendered text, pick keywords
 2. `scout_act("scroll")` — scroll to trigger feed/recommendation APIs
 3. `scout_search("kw1,kw2")` — find which APIs contain the keywords
 4. `scout_context("kw1,kw2")` — see exact field paths and values, confirm targets
@@ -130,7 +132,7 @@ Pick a visible keyword from page text and trace it directly to the API:
 
 When you have no direction and need to survey available data sources:
 
-1. `scout_open(url)` → `scout_act("search", kw)` — trigger search APIs
+1. `scout_open()` → `scout_goto(url)` → `scout_act("search", kw)` — trigger search APIs
 2. `scout_scan(mode="all")` — capture APIs + DOM containers + SSR data in one call
 3. `scout_apis()` — list all endpoints, inspect one by one with `scout_inspect(n)`
 
@@ -142,18 +144,19 @@ Data lives in HTML/DOM, not XHR. `scout_apis()` returning 0 is expected. Use `sc
 
 ```
 src/web_scout/
-├── server.py           # FastMCP entry + 19 tools
-├── state.py            # Global state + multi-tab isolation
-├── browser.py          # Chromium wrapper + text extraction + multi-tab management
-├── monitor.py          # Network listener + JSON API filter + SSR extraction + query
-├── dom.py              # Element scanner + container discovery + field extraction
+├── server.py           # FastMCP entry + 21 tools
+├── state.py            # Global state + _api_pool + _dom_scanners
+├── browser.py          # Chromium wrapper + CDP tab_id management + prefix matching
+├── network_pool.py     # Shared API pool + tab_id filtering + field compression
+├── requester.py        # SessionPage request executor + cookie sync
+├── dom.py              # Element scanner + container discovery v3 + Common Actions
 ├── export.py           # Compressed field docs + raw packet save
-├── login.py            # Login detection + manual login wait + CAPTCHA handling
+├── login.py            # Cookie-change login detection + manual login wait
 └── tools/
-    ├── navigate.py     # Navigate: open close tabs tab_switch tab_close
-    ├── observe.py      # Observe: fetch screenshot elements
-    ├── act.py          # Act: act click login
-    ├── discover.py     # Discover: apis inspect search context export export_all peek
+    ├── navigate.py     # Navigate: open goto close tabs tab_switch tab_close
+    ├── observe.py      # Observe: fetch screenshot elements cookies
+    ├── act.py          # Act: act login
+    ├── discover.py     # Discover: apis inspect search context export export_all peek request
     └── scan.py         # Scan: scan
 ```
 
