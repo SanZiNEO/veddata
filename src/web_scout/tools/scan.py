@@ -1,39 +1,30 @@
-"""Scan tools — comprehensive page data source discovery.
-
-Merges scout_analyze (mode="all") and scout_inspect_dom (mode="dom").
-"""
+"""Scan tools — comprehensive page data source discovery."""
 
 import json as _json
 import time
 
 from web_scout import state
 from web_scout.browser import BrowserSession
-from web_scout.monitor import NetworkMonitor
+from web_scout.network_pool import NetworkPool
 from web_scout.dom import DOMScanner
 
 
 @state.mcp.tool()
-def scout_scan(
-    mode: str = "all",
-    keyword: str | None = None,
-    url: str | None = None,
-) -> str:
+def scout_scan(mode: str = "all", keyword: str | None = None, url: str | None = None) -> str:
     """Comprehensive page data source scanner with two modes.
 
     MODE "all" — full page scan (default):
-      Scans the current page for ALL data sources:
       1. Network APIs — XHR/Fetch requests already captured by the listener
       2. SSR Embedded JSON — window.__INITIAL_STATE__, __NEXT_DATA__, etc.
       3. DOM Containers — repeated HTML structures (card layouts, list items)
 
     MODE "dom" — keyword-targeted DOM scan:
-      Searches the DOM for containers matching the keyword. Optional url
-      parameter opens a new page for one-shot scanning.
+      Searches DOM for containers matching the keyword.
 
     Args:
         mode: "all" for full scan, "dom" for keyword-targeted DOM scan.
-        keyword: For mode "dom" — search keyword to find in DOM elements.
-        url: For mode "dom" — optional URL to open before scanning (one-shot).
+        keyword: For mode "dom" — search keyword.
+        url: For mode "dom" — optional URL to open before scanning.
 
     Returns:
         Data source summary for mode "all", or container list for mode "dom".
@@ -47,39 +38,33 @@ def scout_scan(
 
 
 def _scan_all() -> str:
-    """Full page scan: network APIs + SSR JSON + DOM containers."""
     if not state._browser:
         return "Error: call scout_open first."
-
     if state._login_pending:
         return "Error: call scout_login() first."
 
-    tab_num = state._browser.tab_num()
-    monitor = state._monitors.get(tab_num)
+    tab_id = state._browser.current_tab_id()
+    pool = state.get_pool()
 
     time.sleep(3)
-    before_count = len(monitor.api_records) if monitor else 0
-    if monitor:
-        monitor.step(timeout=5.0)
-    new_count = (len(monitor.api_records) - before_count) if monitor else 0
-
-    embedded_count = monitor.capture_embedded_json() if monitor else 0
+    before_count = len(pool.get_by_tab(tab_id)) if pool else 0
+    if pool:
+        pool.step(timeout=5.0, tab=state._browser.get_current_tab())
+    records = pool.get_by_tab(tab_id) if pool else []
+    new_count = len(records) - before_count
 
     dom = DOMScanner(state._browser.get_current_tab())
-    state._dom_scanners[tab_num] = dom
-
+    state._dom_scanners[tab_id] = dom
     containers = dom.find_containers()
     dom_count = len(dom.containers_cache)
-    total_api = len(monitor.api_records) if monitor else 0
-    total_all = total_api + embedded_count
+    total_api = len(records)
 
-    parts = [state.prefix(tab_num), ""]
+    parts = [state.prefix(tab_id), ""]
 
-    # 1. Network APIs — inline list
     parts.append("=== Network APIs ===")
     if total_api > 0:
-        api_list = monitor.list_apis()
-        lines = api_list.split("\n")
+        api_list = pool.list_apis(tab_id=tab_id) if pool else ""
+        lines = api_list.split("\n") if api_list else []
         parts.append(f"{total_api} total ({new_count} new since last check):")
         parts.extend(lines[:8])
         if len(lines) > 8:
@@ -88,7 +73,6 @@ def _scan_all() -> str:
         parts.append("0 — this may be a pure SSR page, data is in HTML/DOM. Use scout_search() to find keywords.")
     parts.append("")
 
-    # 2. DOM structure — containers + semantic tags
     parts.append(f"=== DOM Structure ({dom_count} containers) ===")
     try:
         tab = state._browser.get_current_tab()
@@ -118,8 +102,7 @@ def _scan_all() -> str:
 
     if dom_count > 0:
         parts.append("  Containers:")
-        cached = dom.containers_cache
-        for i, c in enumerate(cached[:5]):
+        for i, c in enumerate(dom.containers_cache[:5]):
             cls_name = c.get("selector", c.get("class", "?"))[:40]
             count = c.get("count", c.get("num", "?"))
             samples = c.get("samples", c.get("fields", []))
@@ -129,49 +112,42 @@ def _scan_all() -> str:
                 parts.append(f"      |-- {sample_str}")
     parts.append("")
 
-    # 3. Embedded JSON
+    embedded_count = 0
     parts.append("=== Embedded JSON (SSR) ===")
-    if embedded_count > 0:
-        parts.append(f"{embedded_count} [SSR] data sources")
-    else:
-        parts.append("0")
+    parts.append(f"{embedded_count}")
     parts.append("")
     parts.append("---")
-
     return "\n".join(parts)
 
 
 def _scan_dom_keyword(keyword: str) -> str:
-    """Scan current page DOM for containers matching keyword."""
     if not state._browser:
         return "Error: call scout_open first."
-
     if not keyword.strip():
         return "Keyword cannot be empty."
-
-    tab_num = state._browser.tab_num()
-    dom = state._dom_scanners.get(tab_num)
+    tab_id = state._browser.current_tab_id()
+    dom = state._dom_scanners.get(tab_id)
     if not dom:
         dom = DOMScanner(state._browser.get_current_tab())
-        state._dom_scanners[tab_num] = dom
-
+        state._dom_scanners[tab_id] = dom
     result = dom.scan_by_keyword(keyword)
     return f"{state.current_prefix()}\n{result}"
 
 
 def _scan_dom_with_url(url: str, keyword: str) -> str:
-    """Open URL and scan DOM for keyword (one-shot)."""
     if not state._browser:
         state._browser = BrowserSession()
-
+    pool = state.get_pool()
+    if not pool:
+        pool = NetworkPool()
+        state.set_pool(pool)
     try:
         state._browser.open(url)
+        tab = state._browser.get_current_tab()
+        pool.start_tab(tab)
         time.sleep(2)
-
         dom = DOMScanner(state._browser.get_current_tab())
         result = dom.scan_by_keyword(keyword)
-
         return f"{state.current_prefix()}\n{result}"
-
     except Exception as e:
         return f"scout_scan failed: {e}"

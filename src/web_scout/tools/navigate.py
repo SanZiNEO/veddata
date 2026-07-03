@@ -4,13 +4,12 @@ import time as _time
 
 from web_scout import state
 from web_scout.browser import BrowserSession
-from web_scout.monitor import NetworkMonitor
-from web_scout.login import LoginDetector
+from web_scout.network_pool import NetworkPool
 
 
 @state.mcp.tool()
-def scout_open(url: str) -> str:
-    """Open a URL in Chromium, extract full page text as Markdown.
+def scout_open(url: str, reuse: bool = False) -> str:
+    """Open a URL in Chromium, extract full page text and interactive elements.
 
     Starts network monitoring and captures initial API requests automatically.
     After open, use scout_search(keyword) with keywords from the page text to
@@ -19,61 +18,91 @@ def scout_open(url: str) -> str:
 
     Args:
         url: Target website URL.
+        reuse: False = new_env() clean session; True = keep existing browser.
 
     Returns:
         Page title, tab context, and full markdown text.
     """
-    if state._login_pending and state._browser:
-        login_detector = LoginDetector(state._browser.get_current_tab())
-        if not login_detector.is_login_required():
+    # 清理接管来的旧浏览器（除非明确要复用）
+    if not reuse:
+        if state._browser and state._browser._browser:
+            try:
+                if state._browser._browser.states.is_existed:
+                    state._browser._browser.quit(timeout=3, force=True)
+            except Exception:
+                pass
+            state._browser = None
+            state.set_pool(None)
+            state._dom_scanners.clear()
+            state._login = None
             state._login_pending = False
-        else:
-            return ("Login not complete. Please log in manually in the browser, then call scout_login().\n"
-                    "To switch to a different page, first call scout_tab_close().")
 
     if not state._browser:
-        state._browser = BrowserSession()
+        state._browser = BrowserSession(force_new=not reuse)
 
-    monitor = NetworkMonitor(state._browser.get_current_tab())
-    monitor.start()
+    pool = state.get_pool()
+    if not pool:
+        pool = NetworkPool()
+        state.set_pool(pool)
+
+    # 先监听, 再导航
+    tab = state._browser.get_current_tab()
+    pool.start_tab(tab)
 
     try:
         result = state._browser.open(url)
     except Exception as e:
         return f"Failed to open page: {e}"
 
-    tab_num = state._browser.tab_num()
-    state._monitors[tab_num] = monitor
-    state._dom_scanners.pop(tab_num, None)
+    tab_id = result["tab_id"]
 
     _time.sleep(3)
-    monitor.step(timeout=8.0)
+    pool.step(timeout=8.0, tab=tab)
 
-    state._login = LoginDetector(state._browser.get_current_tab())
-    if state._login.is_login_required():
-        state._login_pending = True
-        title = state._browser.get_current_tab().title or url
-        text = state._browser.get_text()
-        return (f"{state.prefix(tab_num)}\n"
-                f"Page opened: {title}\n\n"
-                f"=== Page Text ===\n{text}\n\n"
-                f"This page requires login. Please log in manually in the browser, then call scout_login().")
+    elements = _ax_summary(state._browser.get_current_tab())
 
     return "\n".join([
-        state.prefix(tab_num),
+        state.prefix(tab_id),
         f"Page opened: {result['title'] or url}",
         "",
         "=== Page Text ===",
         result["text"],
+        "",
+        "=== Elements ===",
+        elements,
     ])
+
+
+def _ax_summary(tab) -> str:
+    """Extract visible interactive elements from AXTree with URLs."""
+    try:
+        result = tab.run_cdp('Accessibility.getFullAXTree')
+        nodes = result.get('nodes', [])
+        lines = []
+        for n in nodes:
+            if n.get('ignored', False):
+                continue
+            name = n.get('name', {}).get('value', '')
+            if not name or len(name) < 2:
+                continue
+            role = n.get('role', {}).get('value', '')
+            url = ''
+            for p in n.get('properties', []):
+                if p.get('name') == 'url':
+                    url = p.get('value', {}).get('value', '')
+                    break
+            if url:
+                lines.append(f'[{role}] {name} -> {url}')
+            else:
+                lines.append(f'[{role}] {name}')
+        return '\n'.join(lines)
+    except Exception:
+        return "(AXTree unavailable)"
 
 
 @state.mcp.tool()
 def scout_close() -> str:
     """Close the entire browser and clear all captured data.
-
-    This is the ONLY tool that can close the browser. After calling this,
-    all tabs, captured APIs, DOM data, and login state are cleared.
 
     Returns:
         Status message.
@@ -81,23 +110,19 @@ def scout_close() -> str:
     if state._browser:
         state._browser.close()
         state._browser = None
-    state._monitors.clear()
+    state.set_pool(None)
     state._dom_scanners.clear()
     state._login = None
     state._exporter = None
-    state._login_pending = False
     return "Browser closed. All data cleared."
 
 
 @state.mcp.tool()
 def scout_tabs() -> str:
-    """List all open browser tabs. Shows tab numbers, titles, URLs, and active indicator.
-
-    Use this to see which tabs are open and switch between them.
-    AI can reference tabs by number (e.g. "Tab #2") in other tools.
+    """List all open browser tabs with CDP short IDs.
 
     Returns:
-        Numbered list of tabs with titles and current marker.
+        Tab list with short IDs and current marker.
     """
     if not state._browser:
         return "No browser session. Call scout_open first."
@@ -105,14 +130,13 @@ def scout_tabs() -> str:
 
 
 @state.mcp.tool()
-def scout_tab_switch(num: int) -> str:
-    """Switch the active tab to a specific tab by number.
+def scout_tab_switch(tab: str) -> str:
+    """Switch the active tab by CDP short ID (from scout_tabs output).
 
-    After switching, the new tab becomes the target for observe/act tools
-    (scout_fetch, scout_screenshot, scout_elements, scout_act, scout_click).
+    After switching, observe/act tools target the new tab.
 
     Args:
-        num: Tab number to switch to (from scout_tabs output).
+        tab: CDP short ID (first 8 chars, from scout_tabs output).
 
     Returns:
         Status with the new tab's URL.
@@ -120,22 +144,19 @@ def scout_tab_switch(num: int) -> str:
     if not state._browser:
         return "No browser session. Call scout_open first."
 
-    result = state._browser.switch_tab(num)
+    result = state._browser.switch_tab(tab)
     if "not found" in result:
         return result
-    tab_num = state._browser.tab_num()
-    return f"{result}\n{state.prefix(tab_num)}"
+    tid = state._browser.current_tab_id()
+    return f"{result}\n{state.prefix(tid)}"
 
 
 @state.mcp.tool()
-def scout_tab_close(tab: int | None = None) -> str:
+def scout_tab_close(tab: str = "") -> str:
     """Close a browser tab and clean up its captured data.
 
-    Without arguments: closes the current tab.
-    With a tab number: closes the specified tab (e.g. tab=2).
-
     Args:
-        tab: Optional tab number to close. If omitted, closes current tab.
+        tab: CDP short ID to close. Empty = current tab.
 
     Returns:
         Status message.
@@ -143,15 +164,16 @@ def scout_tab_close(tab: int | None = None) -> str:
     if not state._browser:
         return "No browser session. Call scout_open first."
 
-    num = tab if tab is not None else state._browser.tab_num()
-    result = state._browser.close_tab(num)
+    tid = tab if tab else state._browser.current_tab_id()
+    result = state._browser.close_tab(tid)
 
-    state._monitors.pop(num, None)
-    state._dom_scanners.pop(num, None)
+    pool = state.get_pool()
+    if pool:
+        pool.prune(state._browser.resolve_tab_id(tid) or tid)
+
+    state._dom_scanners.pop(state._browser.resolve_tab_id(tid) or tid, None)
 
     if not state._browser._browser or not state._browser._browser.tab_ids:
-        state._monitors.clear()
+        state.set_pool(None)
         state._dom_scanners.clear()
-        state._login_pending = False
-
     return result
