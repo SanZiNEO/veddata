@@ -108,6 +108,8 @@ def _do_action(tab, pool, step):
         return f"  [{action}] Unsupported action: {action} → +0 new APIs"
 
     time.sleep(1.5)
+    if pool:
+        pool.step(timeout=3.0, tab=tab)
     new_apis = _list_new_apis(before, pool) if pool else []
     lines = [f"  [{action}] {desc} → +{len(new_apis)} new APIs"]
     for api in new_apis[:6]:
@@ -151,9 +153,6 @@ def scout_act(
     """
     if not state._browser:
         return "Error: call scout_open first."
-
-    if state._login_pending:
-        return "Error: call scout_login() first."
 
     tab = state._browser.get_current_tab()
     tab_id = state._browser.current_tab_id()

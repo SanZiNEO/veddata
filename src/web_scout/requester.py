@@ -38,7 +38,7 @@ def exec_request(
         except Exception:
             pass
 
-    url = record.get("url", "")
+    url = record.get("url", "").split("?")[0]
     method = record.get("method", "GET")
     req_headers = dict(record.get("request_headers", {})) if record.get("request_headers") else {}
     req_params = dict(record.get("request_params", {})) if record.get("request_params") else {}
@@ -58,9 +58,21 @@ def exec_request(
     if method.upper() == "GET" and override_body:
         method = "POST"
 
+    # Inject X-XSRF-TOKEN from XSRF-TOKEN cookie if available
+    if tab_id and state._browser:
+        try:
+            tab_obj = state._browser.get_tab_by_id(tab_id)
+            if tab_obj:
+                xsrf_cookies = tab_obj.cookies(all_domains=False, all_info=False)
+                xsrf = next((c["value"] for c in xsrf_cookies if c["name"] == "XSRF-TOKEN"), "")
+                if xsrf:
+                    req_headers["X-XSRF-TOKEN"] = xsrf
+        except Exception:
+            pass
+
     extra_headers = {}
     for k, v in req_headers.items():
-        if k.lower() not in ("cookie", "content-length", "host", "origin", "referer"):
+        if k.lower() not in ("cookie", "content-length", "host"):
             extra_headers[k] = v
 
     t0 = time.perf_counter()

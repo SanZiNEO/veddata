@@ -16,14 +16,13 @@ class BrowserSession:
     Keyed by CDP tab_id (full UUID, 36 chars).  Display uses first 8.
     """
 
-    def __init__(self, force_new: bool = False):
+    def __init__(self):
         self._browser: Chromium | None = None
         self._tabs: dict[str, dict] = {}       # tab_id → {url, title}
         self._current_tab: str | None = None    # active tab_id
-        self._force_new = force_new
 
     def _ensure_browser(self) -> Chromium:
-        if not self._force_new and self._browser and self._browser.states.is_alive:
+        if self._browser and self._browser.states.is_alive:
             return self._browser
 
         headless = os.environ.get("HEADLESS", "false") == "true"
@@ -33,8 +32,6 @@ class BrowserSession:
 
         if address:
             co = ChromiumOptions().set_address(address)
-        elif self._force_new:
-            co = ChromiumOptions().new_env()
         else:
             use_multi = os.environ.get("MULTI_BROWSER", "false") == "true"
             for p in (range(9222, 9232) if use_multi else range(9222, 9223)):
@@ -53,7 +50,6 @@ class BrowserSession:
                 co.set_user_data_path(user_data)
 
         self._browser = Chromium(co)
-        self._force_new = False
         return self._browser
 
     def open(self, url: str) -> dict:
@@ -166,10 +162,29 @@ class BrowserSession:
 
     def close(self) -> str:
         if self._browser:
-            self._browser.quit()
+            try:
+                self._browser.quit(timeout=3, force=True)
+            except Exception:
+                pass
             self._browser = None
             self._tabs.clear()
             self._current_tab = None
+        # 确保 9222 上的进程被清理
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["netstat", "-ano"], capture_output=True, text=True, timeout=10
+            )
+            for line in result.stdout.split("\n"):
+                if ":9222" in line and "LISTENING" in line:
+                    parts = line.strip().split()
+                    if parts:
+                        pid = parts[-1]
+                        subprocess.run(["taskkill", "/f", "/pid", pid],
+                                       capture_output=True, timeout=5)
+                        break
+        except Exception:
+            pass
         return "Browser closed."
 
     def _extract_page_info(self, tab) -> dict:

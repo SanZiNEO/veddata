@@ -85,7 +85,7 @@ print("\n=== 3. find_containers() 当前 v2 算法 ===")
 
 containers_output = scanner.find_containers()
 check("find_containers 有输出", len(containers_output) > 0)
-check("find_containers 含 xN 计数", "x" in containers_output and "→" in containers_output)
+check("find_containers 含计数", "共" in containers_output and "条" in containers_output and "→" in containers_output)
 
 # 输出
 for line in containers_output.split("\n")[:8]:

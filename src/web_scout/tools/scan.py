@@ -40,9 +40,6 @@ def scout_scan(mode: str = "all", keyword: str | None = None, url: str | None = 
 def _scan_all() -> str:
     if not state._browser:
         return "Error: call scout_open first."
-    if state._login_pending:
-        return "Error: call scout_login() first."
-
     tab_id = state._browser.current_tab_id()
     pool = state.get_pool()
 
@@ -149,5 +146,6 @@ def _scan_dom_with_url(url: str, keyword: str) -> str:
         dom = DOMScanner(state._browser.get_current_tab())
         result = dom.scan_by_keyword(keyword)
         return f"{state.current_prefix()}\n{result}"
+        pool.step(timeout=5.0, tab=state._browser.get_current_tab())
     except Exception as e:
         return f"scout_scan failed: {e}"
