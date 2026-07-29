@@ -666,85 +666,134 @@ class WatchEngine:
         return self._snapshots
 ```
 
-### 7.5 工具设计
+### 7.5 搜索：全局 + 局部两层
+
+每个面板的搜索都分两层，和浏览器 DevTools 一致：
+
+```
+全局搜索（跨所有文件/请求）           局部查看（看单个文件/请求的上下文）
+─────────────────────────────        ─────────────────────────────
+scout_search_scripts("userid")       scout_script_source("app.js", query="userid")
+  → app.js: 3 matches                  → 显示 app.js 里匹配行 + 前后各 3 行
+  → utils.js: 1 match                  → 行 145: const data = {userid: 123}
+  → crypto.js: 0 matches               → 行 147: const encrypted = encrypt(userid)
+
+scout_search("userid")               scout_inspect(3)
+  → GET /api/profile: body.user.id     → 显示这个请求的完整响应体
+  → POST /api/auth: body.user_id
+  → #__NEXT_DATA__: page.user.id
+
+scout_dom_search("userid")           scout_dom_locate("div.user-info")
+  → div.user-info > span#uid           → 显示这个节点及其子树
+  → script#__NEXT_DATA__
+```
+
+### 7.6 跨面板搜索链路（完整数据链侦查）
+
+你说的这个流程，其实就是**数据链侦查**——一个值从页面出现到代码处理再到网络传输的完整路径：
+
+```
+Step 1: 从页面文本截取关键词
+  scout_fetch() → 看到视频标题 "Python教程从入门到精通"
+  → 取关键词 "Python教程"
+
+Step 2: 全局搜网络 → 找哪些数据包包含这五个字
+  scout_search("Python教程")
+  → [1] GET /api/video/list → response.data.list[0].title = "Python教程从入门到精通"
+  → [2] POST /api/search → request.body.keyword = "Python教程"
+
+Step 3: 定向查数据包 → 找字段名
+  scout_inspect(1)
+  → 发现字段路径: response.data.list[0].id = 10086
+  → 拿到字段名: id, title
+
+Step 4: 全局搜源码 → 哪些代码处理了这个字段
+  scout_search_scripts("video_id")
+  → detail.js: 2 matches
+  → list.js: 1 match
+
+Step 5: 局部看源码 → 理解数据流
+  scout_script_source("detail.js", query="video_id")
+  → 行 42: const videoId = getUrlParam('id')
+  → 行 45: fetch(`/api/video/detail?id=${videoId}`)
+  → 行 48: renderVideo(data)
+  ← 原来 id=10086 是从 URL 参数取的，然后拼到 API 请求里
+```
+
+### 7.7 脚本搜索工具（完整版）
 
 ```python
 @mcp.tool()
-def scout_watch(
-    requests: list[dict] | None = None,   # [{pattern: "/api/**", tag: "翻页接口"}]
-    scripts: list[dict] | None = None,    # [{text: "encrypt", variables: ["userid","secret"], tag: "加密"}]
-    timeout: int = 10,                    # 等多久
+def scout_search_scripts(
+    query: str,
+    tab: str = "",
 ) -> str:
-    """注册多个观测点，触发后一起返回快照。
+    """全局搜索：在所有已加载的 JS 源码中搜索字符串。
     
-    requests: 请求观测，按 URL 模式匹配
-    scripts: JS 观测，按源码文本定位行，记录指定变量的值
-    timeout: 等所有观测点触发的最长时间（秒）
+    结果按文件分组，显示每个文件的匹配行数。
+    支持正则（query 以 / 开头和结尾时）。
     
-    不拦截、不暂停、不打断页面执行。
-    所有观测点在触发后自动继续，AI 只需看报告。
+    返回格式:
+      app.js ── 3 matches
+        行 145: const data = {userid: 123}
+        行 147: const encrypted = encrypt(userid, secret)
+        行 200: onSubmit(userid)
+      utils.js ── 1 match
+        行 42: return { userid: decode(token) }
+    """
+
+@mcp.tool()
+def scout_script_source(
+    url: str,
+    query: str = "",
+    context_lines: int = 3,
+    start_line: int = 0,
+    line_count: int = 50,
+) -> str:
+    """局部查看：查看某个脚本源码，支持搜索高亮和上下文。
     
-    用法:
-      scout_watch(
-          requests=[{"pattern": "**/api/list", "tag": "列表接口"}],
-          scripts=[{"text": "encrypt", "variables": ["userid","secret"], "tag": "加密函数"}],
-      )
-      → 观测点已注册: R#1(列表接口), S#1(加密函数)
-      scout_act("click", "登录")
-      → ⚠️ 观测报告:
-          [R#1] GET /api/list?page=1
-            → 请求参数: {page: 1}
-            → 响应: {items: [...], total: 100}
-          [S#1] app.js:147  const encrypted = encrypt(userid + secret)
-            → userid = "12345"
-            → secret = "abc123"
-            → 调用栈: onSubmit @ app.js:200 > encrypt @ app.js:147
+    url: 脚本 URL（从 scout_list_scripts 或 scout_search_scripts 获取）
+    query: 搜索字符串，匹配行会高亮
+    context_lines: 匹配行前后显示几行上下文
+    start_line / line_count: 翻页查看（大文件分段读）
     """
 
 @mcp.tool()
 def scout_list_scripts(tab: str = "") -> str:
-    """列出页面所有 JS 脚本的 URL 和大小。"""
-
-@mcp.tool()
-def scout_search_scripts(query: str, tab: str = "") -> str:
-    """在所有 JS 源码中搜索字符串。
+    """列出页面所有 JS 脚本的 URL、大小和行数。
     
-    返回匹配的文件、行号、代码上下文。
-    配合 scout_watch 使用：找到位置 → 设观测点。
+    用于定位目标脚本后传给 scout_script_source。
     """
 ```
 
-### 7.6 工作流示例
+### 7.8 工作流示例
 
 ```
-Step 1: 找代码在哪
-  scout_search_scripts("encrypt")
-  → app.js:147: function encrypt(userid, secret) {...}
-  → utils.js:88: const hash = encrypt(data, key)
+Step 1: 搜 JS 中哪里有 userid
+  scout_search_scripts("userid")
+  → app.js: 3 matches
+  → utils.js: 1 match
 
-Step 2: 设观测点
-  scout_watch(
-      requests=[{"pattern": "**/api/login", "tag": "登录请求"}],
-      scripts=[
-          {"text": "encrypt(userid", "variables": ["userid","secret"], "tag": "加密入口"},
-          {"text": "hash = encrypt", "variables": ["hash"], "tag": "加密结果"},
-      ],
-  )
-  → R#1 登录请求 | S#1 加密入口 | S#2 加密结果
+Step 2: 看 app.js 的具体上下文
+  scout_script_source("app.js", query="userid")
+  → 142: function onSubmit() {
+  → 143:   const userid = getUserId()      ← 取自全局函数
+  → 144:   const secret = getSecret()
+  → 145:   const data = {userid, secret}
+  → 146:
+  → 147:   const encrypted = encrypt(userid + secret)
+  → 148:   return encrypted
+  → 149: }
 
-Step 3: 触发
-  scout_act("click", "登录")
-  → ⚠️ 观测报告 (3/3 命中):
-  
-  [R#1] POST /api/login
-    → 请求体: {userid: "12345", encrypted: "a1b2c3..."}
-  
-  [S#1] app.js:147  const encrypted = encrypt(userid + secret)
-    → userid = "12345"
-    → secret = "xkcd..."            ← 签名密钥！
-  
-  [S#2] app.js:148  return encrypted
-    → hash = "a1b2c3..."            ← 加密结果，和请求体一致
+Step 3: 设观测点，看运行时值
+  scout_watch(scripts=[{"text": "encrypt(userid", "variables": ["userid","secret","encrypted"]}])
+  → 观测点已注册
+  scout_act("click", "登录按钮")
+  → ⚠️ 观测报告:
+    [S#1] app.js:147  encrypt(userid + secret)
+      → userid = "12345"
+      → secret = "xkcd..."
+      → (encrypted 还没赋值，等下一步)
 ```
 ## 8. Phase 5: 值追踪器
 
@@ -953,7 +1002,8 @@ class ConsoleCapture:
 | `scout_request` | 保留，内部从 `SessionPage` → httpx |
 | **`scout_watch`** | **新增**，注册多个观测点（请求+JS），触发后一次返回快照 |
 | **`scout_list_scripts`** | **新增**，列出页面所有 JS 脚本 |
-| **`scout_search_scripts`** | **新增**，在所有 JS 源码中搜索字符串 |
+| **`scout_search_scripts`** | **新增**，全局搜所有 JS 源码 |
+| **`scout_script_source`** | **新增**，查看单个脚本源码，支持搜索高亮和上下文 |
 | **`scout_trace_value`** | **新增**，值追踪器 |
 | **`scout_console`** | **新增**，在页面执行 JS/查看控制台消息 |
 
@@ -971,8 +1021,8 @@ class ConsoleCapture:
 | 观察 | 4 | -1 | +1 | 4 |
 | 交互 | 2 | 0 | 0 | 2 |
 | 扫描 | 1 | 0 | 0 | 1 |
-| 发现 | 8 | 0 | +6 | 14 |
-| **合计** | **21** | **-1** | **+7** | **27** |
+| 发现 | 8 | 0 | +7 | 15 |
+| **合计** | **21** | **-1** | **+8** | **28** |
 
 ## 10.7 工具描述策略 — 让 AI 不再拿它当浏览器用
 
