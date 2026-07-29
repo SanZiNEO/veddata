@@ -688,37 +688,6 @@ scout_dom_search("userid")           scout_dom_locate("div.user-info")
   → script#__NEXT_DATA__
 ```
 
-### 7.6 跨面板搜索链路（完整数据链侦查）
-
-你说的这个流程，其实就是**数据链侦查**——一个值从页面出现到代码处理再到网络传输的完整路径：
-
-```
-Step 1: 从页面文本截取关键词
-  scout_fetch() → 看到视频标题 "Python教程从入门到精通"
-  → 取关键词 "Python教程"
-
-Step 2: 全局搜网络 → 找哪些数据包包含这五个字
-  scout_search("Python教程")
-  → [1] GET /api/video/list → response.data.list[0].title = "Python教程从入门到精通"
-  → [2] POST /api/search → request.body.keyword = "Python教程"
-
-Step 3: 定向查数据包 → 找字段名
-  scout_inspect(1)
-  → 发现字段路径: response.data.list[0].id = 10086
-  → 拿到字段名: id, title
-
-Step 4: 全局搜源码 → 哪些代码处理了这个字段
-  scout_search_scripts("video_id")
-  → detail.js: 2 matches
-  → list.js: 1 match
-
-Step 5: 局部看源码 → 理解数据流
-  scout_script_source("detail.js", query="video_id")
-  → 行 42: const videoId = getUrlParam('id')
-  → 行 45: fetch(`/api/video/detail?id=${videoId}`)
-  → 行 48: renderVideo(data)
-  ← 原来 id=10086 是从 URL 参数取的，然后拼到 API 请求里
-```
 
 ### 7.7 脚本搜索工具（完整版）
 
@@ -765,36 +734,6 @@ def scout_list_scripts(tab: str = "") -> str:
     用于定位目标脚本后传给 scout_script_source。
     """
 ```
-
-### 7.8 工作流示例
-
-```
-Step 1: 搜 JS 中哪里有 userid
-  scout_search_scripts("userid")
-  → app.js: 3 matches
-  → utils.js: 1 match
-
-Step 2: 看 app.js 的具体上下文
-  scout_script_source("app.js", query="userid")
-  → 142: function onSubmit() {
-  → 143:   const userid = getUserId()      ← 取自全局函数
-  → 144:   const secret = getSecret()
-  → 145:   const data = {userid, secret}
-  → 146:
-  → 147:   const encrypted = encrypt(userid + secret)
-  → 148:   return encrypted
-  → 149: }
-
-Step 3: 设观测点，看运行时值
-  scout_watch(scripts=[{"text": "encrypt(userid", "variables": ["userid","secret","encrypted"]}])
-  → 观测点已注册
-  scout_act("click", "登录按钮")
-  → ⚠️ 观测报告:
-    [S#1] app.js:147  encrypt(userid + secret)
-      → userid = "12345"
-      → secret = "xkcd..."
-      → (encrypted 还没赋值，等下一步)
-```
 ## 8. Phase 5: 值追踪器
 
 ### 8.1 目标
@@ -829,21 +768,7 @@ Step 3: 设观测点，看运行时值
 
 ### 8.3 和断点的联动
 
-值追踪不是一次性搜索——它是一个**递进过程**：
-
-```
-scout_trace_value("userid")
-  → 发现 app.js:147 有加密逻辑
-  → scout_breakpoint_js(text="encrypt(userid")
-    → 设好断点
-  → 设观测点: scout_watch(scripts=[{"text": "encrypt(userid", "variables": ["userid","secret"]}])
-  → scout_act("click", "登录")
-    → 观测报告: userid = "12345", secret = "xkcd"
-    → 再设观测点: scout_watch(scripts=[{"text": "return encrypted", "variables": ["encrypted"]}])
-    → 再触发 → 看到加密后的值
-```
-
-所以 `scout_trace_value` 的返回值里，每条匹配都应该可以**直接点进去设断点**。
+`scout_trace_value` 的每条匹配结果都包含位置信息，可直接用于 `scout_watch` 设观测点。
 
 ### 8.4 工具
 
