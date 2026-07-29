@@ -15,9 +15,10 @@
 6. [Phase 3: 网络监听 + 数据捕获](#6-phase-3-网络监听--数据捕获network_monitorpy)
 7. [Phase 4: 批量观测系统](#7-phase-4-批量观测系统)
 8. [Phase 5: 值追踪器](#8-phase-5-值追踪器)
-   9.7 [工具描述策略](#97-工具描述策略--让-ai-不再拿它当浏览器用)
-11. [实施顺序](#11-实施顺序)
-12. [文件结构](#12-文件结构)
+9. [Phase 6: 控制台](#9-phase-6-控制台)
+   10.7 [工具描述策略](#107-工具描述策略--让-ai-不再拿它当浏览器用)
+12. [实施顺序](#12-实施顺序)
+13. [文件结构](#13-文件结构)
 
 ---
 
@@ -833,9 +834,84 @@ js-reverse-mcp 有的功能我们是否覆盖：
 
 **差距不大。** 核心的脚本分析、断点调试、变量查看我们都覆盖了。差的主要是"保存源码到文件"这类辅助功能和反检测这类偏离定位的东西。
 
-## 9. 新工具清单
+---
 
-### 9.1 导航（不变但内部重写）
+## 9. Phase 6: 控制台（Console）
+
+### 9.1 目标
+
+补齐四个 DevTools 面板的最后一块。让 AI 能在页面控制台执行 JS、看 console.log 输出、捕获错误和警告。
+
+### 9.2 功能
+
+```python
+@mcp.tool()
+def scout_console(
+    code: str = "",
+    tail: int = 0,
+    filter: str = "",
+) -> str:
+    """操作页面控制台。
+    
+    code 不为空 → 在页面中执行 JS，返回执行结果
+    code 为空 → 返回控制台历史消息（log/warn/error）
+    tail → 只看最近 N 条
+    filter → 按文本过滤
+    """
+```
+
+### 9.3 实现
+
+Playwright 的 `page.evaluate()` 执行代码并返回值。
+控制台消息通过 `page.on("console")` 事件监听收集。
+
+```python
+class ConsoleCapture:
+    def __init__(self, page):
+        self._messages: list[dict] = []
+        page.on("console", self._on_message)
+    
+    def _on_message(self, msg):
+        self._messages.append({
+            "type": msg.type,          # log / warn / error / info / debug
+            "text": msg.text,
+            "timestamp": time.time(),
+        })
+    
+    def execute(self, code: str) -> str:
+        """在页面执行 JS，返回结果。"""
+        result = await self._page.evaluate(code)
+        return str(result)
+    
+    def get_messages(self, tail=0, filter="") -> list[dict]:
+        msgs = self._messages
+        if filter:
+            msgs = [m for m in msgs if filter in m["text"]]
+        if tail > 0:
+            msgs = msgs[-tail:]
+        return msgs
+```
+
+### 9.4 使用场景
+
+```
+查看控制台错误：
+  scout_console(filter="error")
+  → [error] Uncaught TypeError: Cannot read property 'id' of undefined
+      at app.js:147
+
+验证加密结果：
+  scout_console(code="encrypt('test', 'key')")
+  → "a1b2c3d4..."
+
+查看当前页面状态：
+  scout_console(code="JSON.stringify(window.__INITIAL_STATE__).slice(0, 1000)")
+  → {page: 1, user: {id: 123, name: "xxx"}}
+```
+
+## 10. 新工具清单
+
+### 10.1 导航（不变但内部重写）
 
 | 工具 | 变化 |
 |------|------|
@@ -846,7 +922,7 @@ js-reverse-mcp 有的功能我们是否覆盖：
 | `scout_tab_switch` | 不变 |
 | `scout_tab_close` | 不变 |
 
-### 9.2 观察（合并 + 新增）
+### 10.2 观察（合并 + 新增）
 
 | 工具 | 变化 |
 |------|------|
@@ -856,14 +932,14 @@ js-reverse-mcp 有的功能我们是否覆盖：
 | `scout_cookies` | 保留 |
 | **`scout_dom_tree`** | **新增**，结构化 DOM 目录树 |
 
-### 9.3 交互（不变）
+### 10.3 交互（不变）
 
 | 工具 | 变化 |
 |------|------|
 | `scout_act` | 内部元素定位从 `_find_el_by_text` → Playwright locator |
 | `scout_login` | 保留，`cookies()` API 微调 |
 
-### 9.4 发现（大改）
+### 10.4 发现（大改）
 
 | 工具 | 变化 |
 |------|------|
@@ -879,25 +955,26 @@ js-reverse-mcp 有的功能我们是否覆盖：
 | **`scout_list_scripts`** | **新增**，列出页面所有 JS 脚本 |
 | **`scout_search_scripts`** | **新增**，在所有 JS 源码中搜索字符串 |
 | **`scout_trace_value`** | **新增**，值追踪器 |
+| **`scout_console`** | **新增**，在页面执行 JS/查看控制台消息 |
 
-### 9.5 扫描
+### 10.5 扫描
 
 | 工具 | 变化 |
 |------|------|
 | `scout_scan` | 保留，扩展 `mode` 参数 |
 
-### 9.6 工具总数变化
+### 10.6 工具总数变化
 
 | 分类 | 现 | 减 | 增 | 后 |
 |------|:--:|:--:|:--:|:--:|
 | 导航 | 6 | 0 | 0 | 6 |
 | 观察 | 4 | -1 | +1 | 4 |
 | 交互 | 2 | 0 | 0 | 2 |
-| 发现 | 8 | 0 | +5 | 13 |
 | 扫描 | 1 | 0 | 0 | 1 |
-| **合计** | **21** | **-1** | **+6** | **26** |
+| 发现 | 8 | 0 | +6 | 14 |
+| **合计** | **21** | **-1** | **+7** | **27** |
 
-## 9.7 工具描述策略 — 让 AI 不再拿它当浏览器用
+## 10.7 工具描述策略 — 让 AI 不再拿它当浏览器用
 
 ### 问题
 
@@ -937,7 +1014,7 @@ README 当前定位是 "帮助 AI 发现网页数据源的 MCP 服务器——�
 
 ---
 
-## 11. 实施顺序
+## 12. 实施顺序
 
 ```
 Phase 1 ─ 浏览器层移植 (browser.py + network_monitor.py)
@@ -968,7 +1045,18 @@ Phase 4 ─ 批量观测系统 (watch_engine.py)
   ├── scout_watch（注册多个观测点，一次返回）
   └── 和 scout_act 联动：操作触发观测 → 全部自动记录 → 一起返回
       [验收: 能搜 JS 源码 → 设观测点 → 触发 → 一次拿到所有变量值]
-```
+
+Phase 5 ─ 值追踪 (scout_trace_value + scout_search/scout_context 增强)
+  ├── 跨数据源搜索逻辑（JS 源码 + 网络请求 + DOM 内嵌 + 渲染文本 + WS）
+  ├── scout_trace_value 工具
+  └── scout_search / scout_context 扩展为搜全部数据源
+      [验收: 追踪一个 userid → 显示它在 JS 源码/网络/DOM/变量各处的值]
+
+Phase 6 ─ 控制台 (console)
+  ├── ConsoleCapture（page.on("console") 消息收集）
+  ├── scout_console(code) 执行 JS
+  └── scout_console() 查看控制台历史
+      [验收: 执行 JS → 看结果；查看 console.log/error 消息]
 
 ### 依赖关系
 
@@ -977,13 +1065,15 @@ Phase 1 ──── 没有前置依赖
 Phase 2 ──── 依赖 Phase 1（需要 browser.py 正常工作）
 Phase 3 ──── 依赖 Phase 1（需要 Playwright 事件系统）
 Phase 4 ──── 依赖 Phase 1 + Phase 3（需要 Playwright + CDP session + 数据捕获）
-Phase 5 ──── 依赖 Phase 3（需要所有数据源的捕获能力已就绪）
+Phase 5 ──── 依赖 Phase 3 + Phase 4（需要数据捕获和 JS 源码分析就绪）
+Phase 6 ──── 依赖 Phase 1（只需要 page.evaluate 和 console 事件，独立）
 ```
 
-所以开发顺序是 **Phase 1 → (Phase 2 + 3 可并行) → Phase 4 → Phase 5**。
+所以开发顺序是 **Phase 1 → (Phase 2 + 3 + 6 可并行) → Phase 4 → Phase 5**。
 
 ---
-## 12. 文件结构
+
+## 13. 文件结构
 
 ```
 src/web_scout/
