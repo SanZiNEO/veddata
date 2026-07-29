@@ -13,7 +13,7 @@
 4. [Phase 1: 浏览器层移植](#4-phase-1-浏览器层移植)
 5. [Phase 2: DOM 目录树](#5-phase-2-dom-目录树)
 6. [Phase 3: 网络监听 + 数据捕获](#6-phase-3-网络监听--数据捕获network_monitorpy)
-7. [Phase 4: 请求断点系统](#7-phase-4-请求断点系统)
+7. [Phase 4: 批量观测系统](#7-phase-4-批量观测系统)
 8. [Phase 5: 值追踪器](#8-phase-5-值追踪器)
    9.7 [工具描述策略](#97-工具描述策略--让-ai-不再拿它当浏览器用)
 11. [实施顺序](#11-实施顺序)
@@ -536,169 +536,266 @@ def _do_action(tab, monitor, step):
 
 ---
 
-## 7. Phase 4: 请求断点系统
+## 7. Phase 4: 断点系统 — 批量观测模式
 
-### 7.1 核心流程
+### 7.1 核心设计：不是交互调试，是批量观测
 
-这是 Playwright 迁移后最重要的新能力。
-
-```
-AI 调 scout_breakpoint("**/api/**")
-  ↓
-page.route("**/api/**", breakpoint_handler)
-  ↓
-当匹配的请求发起 →
-  breakpoint_handler(route) 被调用
-  ↓
-route.request 的信息提取并存入暂停队列
-  ↓
-handler await 一个 Future（等待 AI 决策）
-  ↓
-AI 通过 scout_paused / scout_inspect_paused / scout_resume 交互
-  ↓
-handler 拿到决策 → continue / abort / modify / fulfill
-```
-
-### 7.2 暂停队列
-
-```python
-class BreakpointEngine:
-    def __init__(self):
-        self._paused: dict[int, PausedRequest] = {}  # id → 暂停的请求
-        self._next_id = 1
-        self._active_patterns: list[str] = []
-    
-    async def handler(self, route):
-        """注册为 page.route 的回调"""
-        req = route.request
-        
-        # 存起来等 AI 处理
-        paused = PausedRequest(
-            id=self._next_id,
-            route=route,
-            method=req.method,
-            url=req.url,
-            headers=req.headers,
-            post_data=await req.post_data() if req.method != "GET" else None,
-        )
-        self._paused[paused.id] = paused
-        self._next_id += 1
-        
-        # 等 AI 决策（超时后默认放行）
-        await paused.decision.wait(timeout=300)
-        
-        # 执行 AI 的决策
-        if paused.action == "continue":
-            await route.continue_()
-        elif paused.action == "abort":
-            await route.abort()
-        elif paused.action == "modify":
-            await route.continue_(
-                headers=paused.modified_headers,
-                post_data=paused.modified_body,
-            )
-        elif paused.action == "fulfill":
-            await route.fulfill(
-                status=paused.fulfill_status,
-                body=paused.fulfill_body,
-            )
-        
-        del self._paused[paused.id]
-```
-
-### 7.3 断点工具集
-
-```python
-@mcp.tool()
-def scout_breakpoint(
-    pattern: str = "**/*",
-    request_stage: str = "request",  # request / response / both
-) -> str:
-    """设置请求断点。匹配 pattern 的请求会被暂停等 AI 处理。
-    
-    pattern: URL 通配符，如 "**/api/**" 或 "**/*.json"
-    request_stage: 在请求发出前暂停还是在收到响应后暂停
-    """
-
-@mcp.tool()
-def scout_paused() -> str:
-    """列出所有被断点暂停的请求。"""
-    # │ ID │ Method │ URL │ Size │ Status │
-    # ├────┼────────┼─────┼──────┼────────┤
-    # │  1 │ POST   │ /api/login │ 234B │ waiting │
-    # │  2 │ GET    │ /api/list  │ 89B  │ waiting │
-
-@mcp.tool()
-def scout_inspect_paused(
-    breakpoint_id: int
-) -> str:
-    """查看一个被暂停的请求的完整详情。
-    
-    返回: method, url, headers, body, query params
-    """
-
-@mcp.tool()
-def scout_resume(
-    breakpoint_id: int,
-    action: str = "continue",  # continue / abort / modify / fulfill
-    headers: str = "",         # JSON，仅 modify 时
-    body: str = "",            # JSON，仅 modify/fulfill 时
-    status: int = 200,         # 仅 fulfill 时
-) -> str:
-    """对暂停的请求做出决策，让它继续。"""
-```
-
-### 7.4 针对 AI 调试的断点语义
-
-回到你之前说的——断点不是为了"卡住"，而是为了**揭示数据**。
-
-所以断点的返回语义应该是：
+你和 js-reverse-mcp 最大的区别在这里：
 
 ```
-scout_breakpoint("**/api/list") → 已注册
+js-reverse-mcp 的断点：                 Web Scout 的断点：
+  pause → AI 看 → step → pause → AI 看    设多个断点 → 触发 → 全部自动记录 → 一起返回
+  （交互式调试，适合人）                     （批量化观测，适合 AI）
+```
+
+AI 不需要像人一样一步一步调试。它要做的是：
+
+1. **设好多个观测点**（请求层面 + JS 代码层面）
+2. **触发一个操作**（点击/滚动/提交）
+3. **所有观测点自动记录值，然后继续执行**
+4. **AI 一次性拿到所有点的快照**
+
+### 7.2 两种观测点
+
+| 类型 | 观测什么 | 触发方式 |
+|------|---------|---------|
+| **请求观测**（Request Watch） | 匹配 URL 的请求的参数/头/体 | `page.route()` 捕获但不拦截 |
+| **JS 观测**（Script Watch） | 匹配代码行的变量的当前值 | CDP `Debugger.setBreakpoint` → 命中后记录变量 → `resume` 自动继续 |
+
+关键：**不打乱页面执行流。** 断点命中 → 拍照 → 继续，AI 不用做任何决策。
+
+### 7.3 数据流
+
+```
+scout_watch(observations=[...])
+  ↓
+注册 N 个观测点（request 注册 page.route，js 注册 CDP Debugger）
+  ↓
 scout_act("click", "加载更多")
-  → 触发了断点 #1
-    {
-      "breakpoint_id": 1,
-      "triggered_by": "点击「加载更多」按钮",
-      "request": {
-        "method": "GET",
-        "url": "https://api.example.com/list?page=2",
-        "headers": {"Authorization": "Bearer ***"},
-      },
-      "response_so_far": null,            ← request_stage=request 时无响应
-      "data_preview": {                   ← 推断的数据结构
-        "page": "number",
-        "items": "array[item]",
-        "item": {"id": "number", "title": "string"}
-      }
-    }
+  ↓
+[观测点 #1] 请求 /api/list 匹配 → 记录参数 + 响应 → 放行
+[观测点 #2] 代码 encrypt() 行命中 → 记录变量 → resume
+[观测点 #3] 请求 /api/log 匹配 → 记录参数 → 放行
+  ↓
+所有观测点收齐（或超时）
+  ↓
+返回观测报告
 ```
 
-**核心：断点的价值不是暂停本身，而是它给了 AI 一个"在数据流动的精确时刻停下来仔细观察"的机会。**
+### 7.4 代码实现
 
----
+```python
+class WatchEngine:
+    def __init__(self, page, cdp_session):
+        self._page = page
+        self._cdp = cdp_session
+        self._snapshots: list[dict] = []
+        self._pending_count = 0
+        self._done_event = asyncio.Event()
+    
+    async def add_request_watch(self, pattern: str, watch_id: str):
+        """注册请求观测点。请求匹配时记录参数，不拦截。"""
+        async def handler(route):
+            req = route.request
+            self._snapshots.append({
+                "watch_id": watch_id,
+                "type": "request",
+                "url": req.url,
+                "method": req.method,
+                "headers": dict(req.headers),
+                "timestamp": time.time(),
+            })
+            await route.continue_()  # 直接放行，不暂停
+            self._check_done(watch_id)
+        await self._page.route(pattern, handler)
+    
+    async def add_js_watch(self, url: str, line: int, text: str, 
+                           variables: list[str], watch_id: str):
+        """注册 JS 观测点。
+        
+        代码行命中时，记录指定变量的当前值，然后自动继续。
+        variables: 要观测的变量名列表，如 ["userid", "secret"]
+        """
+        bp = await self._cdp.send("Debugger.setBreakpointByUrl", {
+            "url": url,
+            "lineNumber": line,
+        })
+        self._watch_breakpoints[bp["breakpointId"]] = {
+            "watch_id": watch_id,
+            "variables": variables,
+        }
+    
+    async def on_debugger_paused(self, event):
+        """CDP Debugger.paused 回调 — 拍照后自动继续。"""
+        bp_id = event.get("hitBreakpoints", [None])[0]
+        watch = self._watch_breakpoints.get(bp_id)
+        if not watch:
+            await self._cdp.send("Debugger.resume")
+            return
+        
+        # 提取观测的变量值
+        frame = event["callFrames"][0]
+        vars_snapshot = {}
+        for scope in frame.get("scopeChain", []):
+            if scope["type"] == "local":
+                obj = await self._cdp.send("Runtime.getProperties", {
+                    "objectId": scope["object"]["objectId"]
+                })
+                for prop in obj.get("result", []):
+                    if prop["name"] in watch["variables"]:
+                        vars_snapshot[prop["name"]] = prop["value"].get("value", "?")
+        
+        self._snapshots.append({
+            "watch_id": watch["watch_id"],
+            "type": "js",
+            "url": frame.get("url", ""),
+            "line": frame.get("lineNumber", 0),
+            "source": self._get_source_context(frame),
+            "variables": vars_snapshot,         # ← 关键：变量的运行时值
+            "call_stack": self._format_stack(event["callFrames"]),
+        })
+        
+        # 自动继续执行
+        await self._cdp.send("Debugger.resume")
+        self._check_done(watch["watch_id"])
+    
+    async def wait_for_snapshots(self, timeout=10.0) -> list[dict]:
+        """等所有观测点都触发过（或超时），返回快照列表。"""
+        await asyncio.wait_for(self._done_event.wait(), timeout=timeout)
+        return self._snapshots
+```
 
+### 7.5 工具设计
+
+```python
+@mcp.tool()
+def scout_watch(
+    requests: list[dict] | None = None,   # [{pattern: "/api/**", tag: "翻页接口"}]
+    scripts: list[dict] | None = None,    # [{text: "encrypt", variables: ["userid","secret"], tag: "加密"}]
+    timeout: int = 10,                    # 等多久
+) -> str:
+    """注册多个观测点，触发后一起返回快照。
+    
+    requests: 请求观测，按 URL 模式匹配
+    scripts: JS 观测，按源码文本定位行，记录指定变量的值
+    timeout: 等所有观测点触发的最长时间（秒）
+    
+    不拦截、不暂停、不打断页面执行。
+    所有观测点在触发后自动继续，AI 只需看报告。
+    
+    用法:
+      scout_watch(
+          requests=[{"pattern": "**/api/list", "tag": "列表接口"}],
+          scripts=[{"text": "encrypt", "variables": ["userid","secret"], "tag": "加密函数"}],
+      )
+      → 观测点已注册: R#1(列表接口), S#1(加密函数)
+      scout_act("click", "登录")
+      → ⚠️ 观测报告:
+          [R#1] GET /api/list?page=1
+            → 请求参数: {page: 1}
+            → 响应: {items: [...], total: 100}
+          [S#1] app.js:147  const encrypted = encrypt(userid + secret)
+            → userid = "12345"
+            → secret = "abc123"
+            → 调用栈: onSubmit @ app.js:200 > encrypt @ app.js:147
+    """
+
+@mcp.tool()
+def scout_list_scripts(tab: str = "") -> str:
+    """列出页面所有 JS 脚本的 URL 和大小。"""
+
+@mcp.tool()
+def scout_search_scripts(query: str, tab: str = "") -> str:
+    """在所有 JS 源码中搜索字符串。
+    
+    返回匹配的文件、行号、代码上下文。
+    配合 scout_watch 使用：找到位置 → 设观测点。
+    """
+```
+
+### 7.6 工作流示例
+
+```
+Step 1: 找代码在哪
+  scout_search_scripts("encrypt")
+  → app.js:147: function encrypt(userid, secret) {...}
+  → utils.js:88: const hash = encrypt(data, key)
+
+Step 2: 设观测点
+  scout_watch(
+      requests=[{"pattern": "**/api/login", "tag": "登录请求"}],
+      scripts=[
+          {"text": "encrypt(userid", "variables": ["userid","secret"], "tag": "加密入口"},
+          {"text": "hash = encrypt", "variables": ["hash"], "tag": "加密结果"},
+      ],
+  )
+  → R#1 登录请求 | S#1 加密入口 | S#2 加密结果
+
+Step 3: 触发
+  scout_act("click", "登录")
+  → ⚠️ 观测报告 (3/3 命中):
+  
+  [R#1] POST /api/login
+    → 请求体: {userid: "12345", encrypted: "a1b2c3..."}
+  
+  [S#1] app.js:147  const encrypted = encrypt(userid + secret)
+    → userid = "12345"
+    → secret = "xkcd..."            ← 签名密钥！
+  
+  [S#2] app.js:148  return encrypted
+    → hash = "a1b2c3..."            ← 加密结果，和请求体一致
+```
 ## 8. Phase 5: 值追踪器
 
 ### 8.1 目标
 
-你说的场景：**AI 想知道一个值（比如 `userid`）在这个页面里都流经过了哪些数据源。**
+你说的场景：**AI 想知道一个值（比如 `userid`）在这个页面里都流经过了哪些地方。**
 
-这需要跨数据源搜索：
+这不仅包括数据源（网络请求、DOM 内嵌、WebSocket），**还包括 JS 代码**——哪段脚本引用/处理了这个值。
 
 ```
 输入: "userid"
 输出:
-  ├── <script id="__NEXT_DATA__"> → props.pageProps.user.id  = 12345
-  ├── GET /api/user/profile → response.user.id  = 12345
-  ├── POST /api/auth → request.body.user_id  = 12345
-  ├── div.user-info → span#uid → text "12345"
-  ├── window.__INITIAL_STATE__.currentUser.id  = 12345
-  └── ws://push → message.userId  = 12345
+  ├── 源码: app.3a2b.js:147 → encrypt(userid + secret)
+  ├── 源码: utils.js:42 → return { userid: decode(token) }
+  ├── 网络: GET /api/user/profile → response.user.id  = 12345
+  ├── 网络: POST /api/auth → request.body.user_id  = 12345
+  ├── DOM:  div.user-info > span#uid → text "12345"
+  ├── 内嵌: <script id="__NEXT_DATA__"> → pageProps.user.id  = 12345
+  └── WS:  ws://push → message.userId  = 12345
 ```
 
-### 8.2 实现
+### 8.2 搜索范围
+
+| 源 | 搜索方法 | 延迟 |
+|---|---------|:----:|
+| **JS 源码**（新增） | 从 CDP 取所有脚本源码，正则搜索 | 100ms |
+| 已捕获的网络请求 | 本地缓存 grep | 1ms |
+| DOM 内嵌 JSON | evaluate() 反序列化 | 10ms |
+| DOM 渲染文本 | evaluate("innerText.includes(val)") | 5ms |
+| window 全局变量 | evaluate("JSON.stringify(window.__xxx__)") | 10ms |
+| WebSocket 历史 | 有捕获时才可搜 | — |
+| **断点暂停帧**（新增） | 从暂停队列的作用域变量里搜 | 0ms |
+
+### 8.3 和断点的联动
+
+值追踪不是一次性搜索——它是一个**递进过程**：
+
+```
+scout_trace_value("userid")
+  → 发现 app.js:147 有加密逻辑
+  → scout_breakpoint_js(text="encrypt(userid")
+    → 设好断点
+  → 设观测点: scout_watch(scripts=[{"text": "encrypt(userid", "variables": ["userid","secret"]}])
+  → scout_act("click", "登录")
+    → 观测报告: userid = "12345", secret = "xkcd"
+    → 再设观测点: scout_watch(scripts=[{"text": "return encrypted", "variables": ["encrypted"]}])
+    → 再触发 → 看到加密后的值
+```
+
+所以 `scout_trace_value` 的返回值里，每条匹配都应该可以**直接点进去设断点**。
+
+### 8.4 工具
 
 ```python
 @mcp.tool()
@@ -706,33 +803,35 @@ def scout_trace_value(
     value: str,
     tab: str = "",
 ) -> str:
-    """全局搜索一个值出现在哪些数据源中。
+    """全局搜索一个值出现在哪些地方。
     
-    搜索范围:
-    1. SSR <script> JSON 块 → 字段路径 + 值
-    2. 已捕获的 API 请求/响应 → 字段路径 + 值
-    3. DOM 渲染文本 → 元素路径 + 值
-    4. window 全局变量 → 变量路径 + 值
-    5. 断点暂停队列中的请求 → 同上
-    
-    返回按数据源类型分组的命中列表。
+    搜索范围: JS 源码 → 网络请求 → DOM 内嵌 → 渲染文本 → JS 变量 → WS
+    每条匹配标注位置和上下文，支持直接设断点。
     """
 ```
 
-搜索空间：
+### 8.5 和 js-reverse-mcp 的差距
 
-| 数据源 | 搜索方法 | 延迟 |
-|--------|---------|:----:|
-| SSR JSON | `evaluate()` 反序列化 JSON 块 | 10ms |
-| 已捕获 API | 本地缓存中 grep | 1ms |
-| DOM 文本 | `evaluate("document.body.innerText.includes(val)")` | 5ms |
-| DOM 属性 | `evaluate("//*[contains(@*, val)]")` | 20ms |
-| window 变量 | `evaluate("JSON.stringify(window.__xxx__)")` | 10ms |
-| WebSocket 历史 | 有捕获时才可搜 | — |
+js-reverse-mcp 有的功能我们是否覆盖：
 
-不能要求毫秒级返回。对 AI 来说，几百毫秒的搜索完全可接受。
+| 功能 | js-reverse-mcp | Web Scout 计划 |
+|------|:-------------:|:--------------:|
+| XHR 断点 | ✅ | ✅ Phase 4 |
+| JS 断点（设置/移除/列表） | ✅ | ✅ Phase 4 |
+| 单步调试（over/into/out） | ✅ | ✅ Phase 4 |
+| 暂停帧变量查看 | ✅ | ✅ Phase 4 |
+| 断点处求值 (evaluate) | ✅ | ✅ Phase 4 |
+| 列出所有脚本 | ✅ | ✅ Phase 4.4 |
+| 搜索脚本源码 | ✅ | ✅ Phase 5 |
+| 保存脚本源码到文件 | ✅ | ⚠️ 不加优先 |
+| 请求调用栈追踪 | ✅ | ✅ Phase 4 |
+| WebSocket 消息分析 | ✅ | ✅ Phase 3 + 4 |
+| 控制台消息列表 | ✅ | 简单，可加 |
+| CDP 反检测 | ✅ | ❌ 不做 |
+| CloakBrowser 二进制 patch | ✅ | ❌ 不做 |
+| `set_breakpoint_on_text`（压缩代码） | ✅ | ✅ Phase 4 |
 
----
+**差距不大。** 核心的脚本分析、断点调试、变量查看我们都覆盖了。差的主要是"保存源码到文件"这类辅助功能和反检测这类偏离定位的东西。
 
 ## 9. 新工具清单
 
@@ -776,10 +875,9 @@ def scout_trace_value(
 | `scout_export_all` | 保留 |
 | `scout_peek` | 保留 |
 | `scout_request` | 保留，内部从 `SessionPage` → httpx |
-| **`scout_breakpoint`** | **新增**，注册请求断点 |
-| **`scout_paused`** | **新增**，查看暂停的请求 |
-| **`scout_inspect_paused`** | **新增**，查看暂停请求详情 |
-| **`scout_resume`** | **新增**，放行/修改/中止暂停请求 |
+| **`scout_watch`** | **新增**，注册多个观测点（请求+JS），触发后一次返回快照 |
+| **`scout_list_scripts`** | **新增**，列出页面所有 JS 脚本 |
+| **`scout_search_scripts`** | **新增**，在所有 JS 源码中搜索字符串 |
 | **`scout_trace_value`** | **新增**，值追踪器 |
 
 ### 9.5 扫描
@@ -863,19 +961,13 @@ Phase 3 ─ 网络监听 + 数据捕获 (network_monitor.py)
   ├── JS 全局变量扫描 (window.__xxx__)
   ├── WebSocket/SSE 检测
   └── scout_goto 返回语义改为不带标签的数据清单
-      [验收: goto 返回位置+触发+结构，不贴类型标签]
-
-Phase 4 ─ 断点系统 (breakpoint.py)
-  ├── BreakpointEngine（route handler + 暂停队列）
-  ├── scout_breakpoint / scout_paused / scout_inspect_paused / scout_resume
-  └── 和 scout_act 联动：操作触发断点，查看数据，放行
-      [验收: 注册断点 + 触发请求 → AI 查看详情 → 放行/修改]
-
-Phase 5 ─ 值追踪 (scout_trace_value + scout_search 增强)
-  ├── 跨数据源搜索逻辑
-  ├── scout_trace_value 工具
-  └── scout_search / scout_context 扩展为搜全部数据源
-      [验收: 追踪一个 userid → 显示它在 SSR/API/DOM/JS 变量各处的值]
+Phase 4 ─ 批量观测系统 (watch_engine.py)
+  ├── WatchEngine（请求观测：page.route + 记录 + 放行）
+  ├── WatchEngine（JS 观测：CDP Debugger + 变量提取 + 自动 resume）
+  ├── scout_list_scripts / scout_search_scripts（脚本源码分析）
+  ├── scout_watch（注册多个观测点，一次返回）
+  └── 和 scout_act 联动：操作触发观测 → 全部自动记录 → 一起返回
+      [验收: 能搜 JS 源码 → 设观测点 → 触发 → 一次拿到所有变量值]
 ```
 
 ### 依赖关系
@@ -884,7 +976,7 @@ Phase 5 ─ 值追踪 (scout_trace_value + scout_search 增强)
 Phase 1 ──── 没有前置依赖
 Phase 2 ──── 依赖 Phase 1（需要 browser.py 正常工作）
 Phase 3 ──── 依赖 Phase 1（需要 Playwright 事件系统）
-Phase 4 ──── 依赖 Phase 1（route handler 需要 Playwright）
+Phase 4 ──── 依赖 Phase 1 + Phase 3（需要 Playwright + CDP session + 数据捕获）
 Phase 5 ──── 依赖 Phase 3（需要所有数据源的捕获能力已就绪）
 ```
 
@@ -900,26 +992,17 @@ src/web_scout/
 ├── state.py               # 全局状态（改，适配 async）
 │
 ├── browser.py             # Chromium 封装（重写，DP → Playwright）
-├── network_monitor.py     # 网络监听 + 数据捕获（重写，事件驱动）
-├── requester.py           # 请求重放（改，SessionPage → httpx）
-├── breakpoint.py          # 断点引擎（新增）
+├── watch_engine.py        # 批量观测引擎（请求 watch + JS watch + 快照收集）（新增）
 │
 ├── dom.py                 # DOM 扫描 + 目录树（改，新增 dom_tree 函数族）
-├── login.py               # 登录检测（小改，cookies API）
-├── export.py              # 导出（不变）
-│
+├── breakpoint.py          # 请求断点引擎（route handler + 暂停队列）
+├── js_debug.py            # JS 调试引擎（CDP Debugger + 断点/单步/变量提取）（新增）
 └── tools/
     ├── __init__.py
     ├── navigate.py        # open/goto/close/tabs（改，调新 browser API）
     ├── observe.py         # fetch/screenshot/dom_tree/cookies（改，增 dom_tree 删 elements）
-    ├── act.py             # act/login（改，元素定位用 PW locator）
-    ├── discover.py        # apis/inspect/search/context/export/peek/request
-    │                      #   + breakpoint/paused/inspect_paused/resume/trace_value（改+增）
-    └── scan.py            # scan（改，扩展 mode 参数）
-```
-
-### 增减文件
-
+| **新增** | `watch_engine.py` |
+    │                      #   + watch/list_scripts/search_scripts/trace_value（改+增）
 | 操作 | 文件 |
 |------|------|
 | **改** | `server.py`, `state.py`, `browser.py`, `dom.py`, `login.py` |
@@ -931,9 +1014,7 @@ src/web_scout/
 | **不改** | `export.py` |
 
 ---
-
-## 附录：关键设计决策
-
+| **新增** | `breakpoint.py`, `js_debug.py` |
 ### A. 断点超时
 
 暂停的请求不能无限等 AI 决策。默认超时 300 秒，超时后自动 `route.continue_()`。超时时间可通过环境变量 `BREAKPOINT_TIMEOUT` 配置。
