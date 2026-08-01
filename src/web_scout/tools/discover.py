@@ -32,7 +32,7 @@ def scout_apis(keyword: str | None = None, tab: str = "") -> str:
         Numbered list of captured data records.
     """
     if not state._browser:
-        return "Error: call scout_open first."
+        return "Error: no browser session."
     tab_id = state._browser.current_tab_id()
     if tab:
         tab_id = state._browser.resolve_tab_id(tab) or tab
@@ -57,7 +57,7 @@ def scout_inspect(index: int = 0, detail: str = "preview", tab: str = "", indice
         Request/response details per record.
     """
     if not state._browser:
-        return "Error: call scout_open first."
+        return "Error: no browser session."
     tab_id = state._browser.current_tab_id()
     if tab:
         tab_id = state._browser.resolve_tab_id(tab) or tab
@@ -94,13 +94,13 @@ async def scout_search(keyword: str, tab: str = "") -> str:
         Matching data sources.
     """
     if not state._browser:
-        return "Error: call scout_open first."
+        return "Error: no browser session."
     tab_id = state._browser.current_tab_id()
     if tab:
         tab_id = state._browser.resolve_tab_id(tab) or tab
     pool = state.get_pool()
     if not pool:
-        return "No data. Call scout_open() first."
+        return "No data."
 
     keywords = [k.strip() for k in keyword.split(",") if k.strip()]
     lines = [state.prefix(tab_id), ""]
@@ -148,7 +148,6 @@ async def scout_search(keyword: str, tab: str = "") -> str:
 
     display = keyword if len(keywords) == 1 else f"{len(keywords)} keywords: {', '.join(keywords)}"
     lines.insert(1, f'Search results for {display}:')
-    lines.append("\nUse scout_context() to see field paths and values.")
     return "\n".join(lines)
 
 
@@ -164,7 +163,7 @@ async def scout_context(keyword: str, tab: str = "") -> str:
         Detailed field paths and sample values.
     """
     if not state._browser:
-        return "Error: call scout_open first."
+        return "Error: no browser session."
     tab_id = state._browser.current_tab_id()
     if tab:
         tab_id = state._browser.resolve_tab_id(tab) or tab
@@ -229,7 +228,7 @@ def scout_export(index: int = 0, format: str = "both", tab: str = "", indices: s
         Export result with saved file path and/or field document.
     """
     if not state._browser:
-        return "Error: call scout_open first."
+        return "Error: no browser session."
     tab_id = state._browser.current_tab_id()
     if tab:
         tab_id = state._browser.resolve_tab_id(tab) or tab
@@ -268,7 +267,7 @@ def scout_export_all(format: str = "both", tab: str = "", output_dir: str | None
         Summary of exported APIs.
     """
     if not state._browser:
-        return "Error: call scout_open first."
+        return "Error: no browser session."
     tab_id = state._browser.current_tab_id()
     if tab:
         tab_id = state._browser.resolve_tab_id(tab) or tab
@@ -481,7 +480,7 @@ async def scout_watch(
         注册清单或观测报告。
     """
     if not state._browser:
-        return "Error: call scout_open first."
+        return "Error: no browser session."
     tab_id = state._browser.resolve_tab_id(tab) or state._browser.current_tab_id()
 
     if observations:
@@ -505,8 +504,7 @@ async def scout_watch(
                 registered.append(f"{watch_id}(JS {obs.get('url', '')}:{obs.get('line', 0)})")
             else:
                 return f"Unsupported observation type: {obs_type} (use 'request' or 'js')"
-        return (f"Registered {len(registered)} watches: {', '.join(registered)} — "
-                f"now call scout_act(...) to trigger, then scout_watch(collect=True)")
+        return (f"Registered {len(registered)} watches: {', '.join(registered)}")
 
     if collect:
         engine = state._watches.get(tab_id)
@@ -536,7 +534,7 @@ async def scout_list_scripts(tab: str = "") -> str:
         脚本清单。
     """
     if not state._browser:
-        return "Error: call scout_open first."
+        return "Error: no browser session."
     tab_id = state._browser.resolve_tab_id(tab) or state._browser.current_tab_id()
     registry = state._script_registries.get(tab_id)
     if registry is None:
@@ -569,7 +567,7 @@ async def scout_search_scripts(query: str, tab: str = "") -> str:
         按文件分组的匹配行。
     """
     if not state._browser:
-        return "Error: call scout_open first."
+        return "Error: no browser session."
     tab_id = state._browser.resolve_tab_id(tab) or state._browser.current_tab_id()
     registry = state._script_registries.get(tab_id)
     if registry is None:
@@ -621,7 +619,7 @@ async def scout_script_source(
         源码片段。
     """
     if not state._browser:
-        return "Error: call scout_open first."
+        return "Error: no browser session."
     tab_id = state._browser.resolve_tab_id(tab) or state._browser.current_tab_id()
     registry = state._script_registries.get(tab_id)
     if registry is None:
@@ -658,9 +656,7 @@ async def scout_script_source(
     if start_line >= total:
         return f"{state.prefix(tab_id)}\n{url}: start_line {start_line} beyond {total} lines."
     out = []
-    for j in range(start_line, min(total, start_line + line_count)):
-        out.append(f"{j + 1:5d} | {lines[j][:200]}")
-    more = "" if start_line + line_count >= total else f"\n... (call scout_script_source(start_line={start_line + line_count}) for more)"
+    more = "" if start_line + line_count >= total else "\n... (truncated)"
     return f"{state.prefix(tab_id)}\n{url}\n" + "\n".join(out) + more
 
 
@@ -682,7 +678,7 @@ async def scout_trace_value(value: str, tab: str = "") -> str:
         按来源分组的位置清单。
     """
     if not state._browser:
-        return "Error: call scout_open first."
+        return "Error: no browser session."
     tab_id = state._browser.resolve_tab_id(tab) or state._browser.current_tab_id()
     page = await state._browser.get_page_by_id(tab_id)
     if page is None:
@@ -771,9 +767,5 @@ async def scout_trace_value(value: str, tab: str = "") -> str:
     for name, items in groups:
         lines.append(f"=== {name} ===")
         lines.extend(items)
-        if name == "源码":
-            lines.append("  → 可用 scout_watch 在该位置设观测点（type=js, url+line）")
-        elif name == "网络":
-            lines.append("  → 可用 scout_watch 设请求观测点（type=request, pattern=路径）")
         lines.append("")
     return "\n".join(lines)

@@ -24,7 +24,7 @@ async def scout_fetch(max_length: int = 5000, start_index: int = 0, tab: str = "
         Page text segment with links in range.
     """
     if not state._browser:
-        return "Error: call scout_open first."
+        return "Error: no browser session."
 
     tab_id = state._browser.resolve_tab_id(tab) or state._browser.current_tab_id()
     page = await state._browser.get_page_by_id(tab_id)
@@ -92,9 +92,7 @@ async def scout_fetch(max_length: int = 5000, start_index: int = 0, tab: str = "
         for l in segment_links:
             lines.append(f"[link] {l['name']} -> {l['url']}")
     if len(chunk) == max_length and len(text) > start_index + max_length:
-        lines.append(
-            f"\n... (truncated, call scout_fetch(start_index={start_index + max_length}) for more)"
-        )
+        lines.append("\n... (truncated)")
     return "\n".join(lines)
 
 
@@ -110,7 +108,7 @@ async def scout_screenshot(name: str = "screenshot", full_page: bool = True) -> 
         File path of the saved screenshot with tab context.
     """
     if not state._browser:
-        return "Error: call scout_open first."
+        return "Error: no browser session."
 
     try:
         page = await state._browser.get_current_page()
@@ -140,7 +138,7 @@ async def scout_dom_tree(depth: int = 4, tab: str = "") -> str:
     """
     tree = await _ensure_tree(tab)
     if tree is None:
-        return "Error: call scout_open first."
+        return "Error: no browser session."
     return f"{state.prefix(tree.tab_id)}\n{tree.format(depth)}"
 
 
@@ -159,7 +157,7 @@ async def scout_dom_search(text: str, tab: str = "") -> str:
     """
     tree = await _ensure_tree(tab)
     if tree is None:
-        return "Error: call scout_open first."
+        return "Error: no browser session."
     matches = tree.search(text)
     if not matches:
         return f"{state.prefix(tree.tab_id)}\nNo matches in DOM tree."
@@ -188,7 +186,7 @@ async def scout_dom_locate(path: str, tab: str = "") -> str:
     """
     tree = await _ensure_tree(tab)
     if tree is None:
-        return "Error: call scout_open first."
+        return "Error: no browser session."
     node = tree.locate(path)
     if node is None:
         return f"{state.prefix(tree.tab_id)}\nPath not found: {path}"
@@ -245,7 +243,7 @@ async def scout_cookies(all_domains: bool = False, all_info: bool = False, tab: 
         Formatted cookie list.
     """
     if not state._browser:
-        return "Error: call scout_open first."
+        return "Error: no browser session."
 
     tab_id = state._browser.resolve_tab_id(tab) or state._browser.current_tab_id()
     page = await state._browser.get_page_by_id(tab_id)
@@ -311,7 +309,7 @@ async def scout_console(code: str = "", tail: int = 0, filter: str = "", tab: st
         执行结果或消息列表。
     """
     if not state._browser:
-        return "Error: call scout_open first."
+        return "Error: no browser session."
     tab_id = state._browser.resolve_tab_id(tab) or state._browser.current_tab_id()
     page = await state._browser.get_page_by_id(tab_id)
     if page is None:

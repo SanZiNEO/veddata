@@ -57,7 +57,7 @@ async def scout_open() -> str:
             if tid:
                 browser._current_tab = tid
 
-    return "Browser ready. Call scout_goto(url) to navigate."
+    return "Browser ready."
 
 
 def _summarize_body(body, max_keys: int = 6) -> str:
@@ -142,7 +142,7 @@ async def scout_goto(url: str, new_tab: bool = False) -> str:
         DOM tree + captured data list + actions.
     """
     if not state._browser:
-        return "Error: call scout_open first."
+        return "Error: no browser session."
 
     pool = state.get_pool()
     if not pool:
@@ -208,7 +208,6 @@ async def scout_goto(url: str, new_tab: bool = False) -> str:
         parts.extend(actions)
     else:
         parts.append("(no interactive elements found)")
-    parts.append("  → 操作后调用 scout_apis 查看新数据")
     return "\n".join(parts)
 
 
@@ -243,7 +242,7 @@ async def scout_tabs() -> str:
         Tab list with short IDs and current marker.
     """
     if not state._browser:
-        return "No browser session. Call scout_open first."
+        return "No browser session."
     return await state._browser.list_tabs()
 
 
@@ -260,7 +259,7 @@ async def scout_tab_switch(tab: str) -> str:
         Status with the new tab's URL.
     """
     if not state._browser:
-        return "No browser session. Call scout_open first."
+        return "No browser session."
 
     result = await state._browser.switch_tab(tab)
     if "not found" in result:
@@ -283,7 +282,7 @@ async def scout_tab_close(tab: str = "") -> str:
         Status message.
     """
     if not state._browser:
-        return "No browser session. Call scout_open first."
+        return "No browser session."
 
     tab_ids_to_close = [t.strip() for t in tab.split(",") if t.strip()] if tab else [state._browser.current_tab_id()]
     pool = state.get_pool()

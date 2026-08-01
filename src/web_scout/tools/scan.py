@@ -39,7 +39,7 @@ async def scout_scan(mode: str = "all", keyword: str | None = None, url: str | N
 
 async def _scan_all() -> str:
     if not state._browser:
-        return "Error: call scout_open first."
+        return "Error: no browser session."
     tab_id = state._browser.current_tab_id()
     pool = state.get_pool()
     if pool:
@@ -68,14 +68,14 @@ async def _scan_all() -> str:
         if len(lines) > 8:
             parts.append(f"... and {len(lines) - 8} more")
     else:
-        parts.append("0 — data may be embedded in HTML/DOM. Use scout_search() to find keywords.")
+        parts.append("0 — data may be embedded in HTML/DOM.")
     parts.append("")
 
     parts.append("=== DOM Structure ===")
     tree_lines = tree.format(3).split("\n")
     parts.extend(tree_lines[:60])
     if len(tree_lines) > 60:
-        parts.append(f"... ({len(tree_lines) - 60} more lines, call scout_dom_tree() for full)")
+        parts.append(f"... ({len(tree_lines) - 60} more lines, truncated)")
     parts.append("")
 
     # 重复容器统计
@@ -102,7 +102,7 @@ async def _scan_all() -> str:
 
 async def _scan_dom_keyword(keyword: str) -> str:
     if not state._browser:
-        return "Error: call scout_open first."
+        return "Error: no browser session."
     if not keyword.strip():
         return "Keyword cannot be empty."
     tab_id = state._browser.current_tab_id()

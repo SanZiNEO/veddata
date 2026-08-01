@@ -150,7 +150,7 @@ async def scout_act(
         Status with new API counts and paths per step.
     """
     if not state._browser:
-        return "Error: call scout_open first."
+        return "Error: no browser session."
 
     page = await state._browser.get_current_page()
     if page is None:
@@ -189,7 +189,7 @@ async def scout_login(timeout: int = 300) -> str:
         Status message with refreshed page text.
     """
     if not state._browser:
-        return "Error: call scout_open first."
+        return "Error: no browser session."
 
     page = await state._browser.get_current_page()
     if page is None:
@@ -202,7 +202,6 @@ async def scout_login(timeout: int = 300) -> str:
         text = await state._browser.get_text()
         return (f"{state.current_prefix()}\n"
                 f"Login successful!\n\n"
-                f"Page text:\n{text[:2000]}\n\n"
-                f"Call scout_scan(mode='all') to capture API endpoints.")
+                f"Page text:\n{text[:2000]}")
     else:
         return f"Login timeout ({timeout}s). Please try again."
