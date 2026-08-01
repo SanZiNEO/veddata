@@ -16,25 +16,29 @@
 
 | ✅ 做的 | ❌ 不做的 |
 |---------|----------|
-| Network 面板 → JSON API 端点 | XHR 断点追踪调用链 |
-| DOM → 重复结构 + CSS 选择器 | JS 加密 / wasm 逆向 |
+| 事件驱动捕获网络请求 + 内嵌数据 | 交互式断点调试（单步/暂停） |
+| DOM 目录树：容器/字段/交互标记 | JS 加密 / wasm 逆向 |
 | 请求参数 + 响应结构提取 | WebSocket 二进制帧解码 |
-| 页面全文 → Markdown 给 AI 阅读 | E2EE 解密 |
-| 压缩字段文档 → AI 据此写爬虫 | 自动生成可运行的爬虫代码 |
+| 批量观测：请求/JS 断点自动拍照 | E2EE 解密 |
+| 压缩字段文档 → AI 据此写爬虫 | 反检测 / 风控对抗 |
 
 适用于标准 HTTP JSON API 站点。不适用于加密数据流、wasm 混淆等逆向场景。
 
 ## 原理
 
 ```
-网站 → 浏览器 → 全文 Markdown
-       ↓           ↓
-  网络监听     AI 阅读文本 → 选关键词
-       ↓           ↓
-  API 捕获     搜索 → 匹配含关键词的 API
-       ↓               ↓
-  字段文档 ←──────────┘
-  原始数据包保存到本地
+网站 → 浏览器（Playwright 事件驱动捕获）
+       ↓                                ↓
+  网络请求 + 内嵌数据               DOM 目录树
+  （带触发时机，不贴类型标签）       （容器/字段/交互标记）
+       ↓                                ↓
+  scout_goto 返回数据源清单 ←────────────┘
+       ↓
+  关键词反查（scout_search / scout_trace_value）→ 字段路径
+       ↓
+  批量观测（scout_watch）→ 请求/JS 断点自动拍照 → 变量中间值
+       ↓
+  字段文档（scout_export）→ AI 据此写爬虫
 ```
 
 ## 快速开始
@@ -66,11 +70,10 @@ pip install -e .
 | `HEADLESS` | `"false"` | 无头模式（`"true"` 不显示浏览器窗口） |
 | `BROWSER_PATH` | 自动 | 浏览器路径，`"edge"` 使用 Edge |
 | `BROWSER_ADDRESS` | 无 | 连接已有浏览器（如 `127.0.0.1:9222`），设置后忽略 HEADLESS/BROWSER_PATH |
-| `MULTI_BROWSER` | `"false"` | `"true"` 时尝试多个调试端口（9222-9231），避免端口冲突 |
-| `USER_DATA_DIR` | 临时 | 持久化用户文件夹，保留登录态 |
-| `LOGIN_TIMEOUT` | `"300"` | 登录最大等待秒数 |
-| `MAX_TEXT_LENGTH` | `"3000"` | scout_open 页面文本最大字符数 |
+| `USER_DATA_DIR` | `".web-scout-data"` | 持久化用户文件夹，保留登录态 |
+| `MAX_TEXT_LENGTH` | `"3000"` | 页面文本最大字符数 |
 | `RESPONSE_DIR` | `"./response"` | 数据导出默认目录，可用 `output_dir` 参数覆盖 |
+
 ## 工具（29 个）
 
 ### 导航（6 个）
@@ -107,7 +110,7 @@ pip install -e .
 | `scout_inspect` | 查看数据的完整请求/响应，支持逗号分隔多 ID |
 | `scout_search` | 跨数据源搜索：网络 → 内嵌 → 脚本源码 → DOM，支持逗号分隔多关键词 |
 | `scout_context` | 搜索关键词返回精确字段路径 + 采样值，支持逗号分隔多关键词 |
-| `scout_watch` | 批量观测：注册请求/JS 断点观测点 → 触发 → 一次取回全部变量快照 |
+| `scout_watch` | 批量观测：注册请求/JS 断点观测点 → 触发 → 一次取回全部变量快照（自动继续，不打断页面） |
 | `scout_list_scripts` | 列出页面所有 JS 脚本的 URL、大小和行数 |
 | `scout_search_scripts` | 全局搜索所有 JS 源码（支持 /regex/） |
 | `scout_script_source` | 查看单个脚本源码，支持搜索高亮和上下文 |
@@ -126,45 +129,56 @@ pip install -e .
 
 ### 🚀 快速路径（推荐）
 
-从页面文本中选一个关键词，直接反查数据来源：
+从页面数据清单里选一个关键词，直接反查数据来源：
 
-1. `scout_open()` → `scout_goto(url)` — 启动浏览器 → 导航到页面，浏览渲染文本，选关键词（可多个）
+1. `scout_open()` → `scout_goto(url)` — 启动浏览器 → 导航，读 DOM 树 + 数据源清单，选关键词
 2. `scout_act("scroll")` — 滚动加载，触发推荐/动态流等接口
-3. `scout_search("词1,词2")` — 用关键词反查，看哪些 API 的响应体里有它们
+3. `scout_search("词1,词2")` — 用关键词反查，看哪些数据源里有它们
 4. `scout_context("词1,词2")` — 看精确字段路径和值，确认目标
 5. `scout_inspect(indices="1,3")` → `scout_export(indices="1,3")` — 批量查看和导出
 
-**核心思路**：跳过枚举（scan/apis），从关键词直接反推 API 和字段路径。四步定位，比全量扫描快。
+**核心思路**：跳过枚举（scan/apis），从关键词直接反推 API 和字段路径。比全量扫描快。
 
 ### 全量扫描（不知道关键词时）
 
 完全没有方向时，先看页面有哪些数据源：
 
-1. `scout_open()` → `scout_goto(url)` → `scout_act("search", kw)` — 触发搜索接口
-2. `scout_scan(mode="all")` — 一次性抓 API + DOM 容器 + SSR 数据
+1. `scout_open()` → `scout_goto(url)` — 直接看 DOM 树和数据清单
+2. `scout_scan(mode="all")` — 一次性抓 API + DOM 结构 + 内嵌数据
 3. `scout_apis()` — 列出所有端点，逐个 `scout_inspect(n)`
 
-### SSR 页面
+### 批量观测（逆向定位）
 
-数据全在 HTML 里，没有 XHR 请求。`scout_apis()` 返回 0 是正常的，改用 `scout_search` + `scout_scan(mode="dom")`。
+想在代码执行到某处时拿到当时的中间值（如加密参数）：
+
+1. `scout_search_scripts("encrypt")` — 定位敏感代码行
+2. `scout_watch(observations=[{"type":"js","url":"...app.js","line":147,"variables":["key"]}])` — 注册断点观测
+3. `scout_act(...)` — 触发操作，断点命中自动拍照并继续（页面不停）
+4. `scout_watch(collect=True)` — 一次取回全部变量快照
+
+### 数据全在 HTML 里的页面
+
+没有 XHR 请求时 `scout_apis()` 数量少是正常的。用 `scout_dom_search` + `scout_trace_value` 找内嵌数据（`<script>` JSON 块、`window.__xxx__` 全局变量）。
 
 ## 架构
 
 ```
 src/web_scout/
-├── server.py           # FastMCP 入口 + 21 个工具
-├── state.py            # 全局状态 + _api_pool + _dom_scanners
-├── browser.py          # Chromium 封装 + CDP tab_id 管理 + 前缀匹配
-├── network_pool.py     # API 公共池 + 按 tab_id 过滤 + 字段压缩
-├── requester.py        # SessionPage 请求执行器 + cookie 同步
-├── dom.py              # 元素扫描 + 容器发现 v3 + Common Actions
+├── server.py           # FastMCP 入口 + 29 个工具
+├── state.py            # 全局状态 + attach_page 统一挂接（monitor/脚本注册表）
+├── browser.py          # Playwright 封装 + 多标签页自动注册 + 前缀匹配
+├── network_monitor.py  # 事件驱动数据捕获（网络/内嵌/WS）+ 触发上下文，无类型标签
+├── dom.py              # DOM 目录树：内存快照 + 折叠 + 搜索/定位
+├── watch_engine.py     # 批量观测：请求观测 + JS 断点自动拍照放行
+├── scripts.py          # JS 脚本收集（scriptParsed）/ 搜索 / 源码
+├── requester.py        # httpx 请求执行器 + cookie 同步
 ├── export.py           # 压缩字段文档 + 原始数据包保存
 ├── login.py            # cookie 变化检测登录 + 手动登录等待
 └── tools/
     ├── navigate.py     # 导航: open goto close tabs tab_switch tab_close
-    ├── observe.py      # 观察: fetch screenshot elements cookies
+    ├── observe.py      # 观察: fetch screenshot dom_tree dom_search dom_locate cookies console
     ├── act.py          # 交互: act login
-    ├── discover.py     # 发现: apis inspect search context export export_all peek request
+    ├── discover.py     # 发现: apis inspect search context watch scripts trace export peek request
     └── scan.py         # 扫描: scan
 ```
 
