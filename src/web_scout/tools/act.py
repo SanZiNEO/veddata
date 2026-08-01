@@ -1,85 +1,83 @@
 """Act tools — page interaction: input/scroll/click/select chain, login."""
 
-import time
+import asyncio
 
 from web_scout import state
 from web_scout.login import LoginDetector
 
 
-def _find_el_by_text(tab, text, tags="a,button,input,select,span"):
-    for tag in tags.split(','):
-        for el in tab.eles(f'tag:{tag}'):
-            try:
-                if not el.states.is_displayed:
-                    continue
-                combined = (
-                    (el.text or '')
-                    + ' ' + (el.attr('placeholder') or '')
-                    + ' ' + (el.attr('aria-label') or '')
-                )
-                if text in combined:
-                    return el
-            except Exception:
-                pass
+async def _find_locator(page, text, kinds):
+    """按文本/占位符找一个可点击的 locator。
+
+    尝试顺序：placeholder（input）→ role（button/link）→ has_text 兜底。
+    返回第一个能成功点击（timeout 3s）的 locator，找不到返回 None。
+    """
+    candidates = []
+    if kinds in ("input,textarea",):
+        candidates.append(page.get_by_placeholder(text).first)
+        candidates.append(page.locator("input,textarea").filter(has_text=text).first)
+    if "button" in kinds:
+        candidates.append(page.get_by_role("button", name=text).first)
+    if "a" in kinds:
+        candidates.append(page.get_by_role("link", name=text).first)
+    if "span" in kinds or kinds in ("a,button,div", "a,li,span,option"):
+        candidates.append(page.get_by_text(text, exact=False).first)
+    candidates.append(page.locator(",".join(kinds)).filter(has_text=text).first)
+
+    for locator in candidates:
+        try:
+            await locator.click(timeout=3000)
+            return locator
+        except Exception:
+            continue
     return None
 
 
-def _do_input(tab, value, target):
-    el = _find_el_by_text(tab, target, "input,textarea")
-    if not el:
+async def _do_input(page, value, target):
+    locator = await _find_locator(page, target, "input,textarea")
+    if locator is None:
         return f"Input '{target}' not found"
-    el.click()
-    time.sleep(0.3)
-    el.clear()
-    el.input(value)
-    tab.actions.key_down('ENTER').key_up('ENTER')
+    await locator.fill(value)
+    await page.keyboard.press("Enter")
     return f"Input '{value}' into '{target}'"
 
 
-def _do_scroll(tab, value):
+async def _do_scroll(page, value):
     if value in (None, "bottom"):
-        tab.scroll.to_bottom()
+        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         return "Scrolled to bottom"
     elif value == "top":
-        tab.scroll.to_top()
+        await page.evaluate("window.scrollTo(0, 0)")
         return "Scrolled to top"
     elif value == "down":
-        vp = tab.run_js("return window.innerHeight")
-        tab.scroll.down(vp)
-        return f"Scrolled down {vp}px"
+        await page.evaluate("window.scrollBy(0, window.innerHeight)")
+        return "Scrolled down one viewport"
     elif value == "up":
-        vp = tab.run_js("return window.innerHeight")
-        tab.scroll.up(vp)
-        return f"Scrolled up {vp}px"
+        await page.evaluate("window.scrollBy(0, -window.innerHeight)")
+        return "Scrolled up one viewport"
     elif value and value.lstrip("-").isdigit():
         px = int(value)
-        if px >= 0:
-            tab.scroll.down(px)
-        else:
-            tab.scroll.up(abs(px))
+        await page.evaluate(f"window.scrollBy(0, {px})")
         return f"Scrolled {'down' if px >= 0 else 'up'} {abs(px)}px"
     else:
         return f"Unsupported scroll value: '{value}'"
 
 
-def _do_click(tab, target):
-    el = _find_el_by_text(tab, target, "a,button,span")
-    if not el:
+async def _do_click(page, target):
+    locator = await _find_locator(page, target, "a,button,span")
+    if locator is None:
         return f"Click '{target}' not found"
-    el.click()
     return f"Clicked '{target}'"
 
 
-def _do_select(tab, value, target):
-    el = _find_el_by_text(tab, target, "a,button,div")
-    if not el:
+async def _do_select(page, value, target):
+    locator = await _find_locator(page, target, "a,button,div")
+    if locator is None:
         return f"Select trigger '{target}' not found"
-    el.click()
-    time.sleep(0.3)
-    opt = _find_el_by_text(tab, value, "a,li,span,option")
-    if not opt:
+    await asyncio.sleep(0.3)
+    opt = await _find_locator(page, value, "a,li,span,option")
+    if opt is None:
         return f"Option '{value}' not found"
-    opt.click()
     return f"Selected '{value}' in '{target}'"
 
 
@@ -88,28 +86,28 @@ def _list_new_apis(before: list, pool) -> list[dict]:
     return [r for r in pool.api_records if (r["method"], r["path"]) not in before_paths]
 
 
-def _do_action(tab, pool, step):
+async def _do_action(page, pool, step):
     a = step
     action = a.get("action", "")
     value = a.get("value")
     target = a.get("target")
 
     before = list(pool.api_records) if pool else []
+    if pool:
+        pool.set_trigger_context(f"{action}:{target or ''}")
 
     if action == "input":
-        desc = _do_input(tab, value, target)
+        desc = await _do_input(page, value, target)
     elif action == "scroll":
-        desc = _do_scroll(tab, value)
+        desc = await _do_scroll(page, value)
     elif action == "click":
-        desc = _do_click(tab, target)
+        desc = await _do_click(page, target)
     elif action == "select":
-        desc = _do_select(tab, value, target)
+        desc = await _do_select(page, value, target)
     else:
         return f"  [{action}] Unsupported action: {action} → +0 new APIs"
 
-    time.sleep(1.5)
-    if pool:
-        pool.step(timeout=3.0, tab=tab)
+    await page.wait_for_timeout(1500)
     new_apis = _list_new_apis(before, pool) if pool else []
     lines = [f"  [{action}] {desc} → +{len(new_apis)} new APIs"]
     for api in new_apis[:6]:
@@ -120,7 +118,7 @@ def _do_action(tab, pool, step):
 
 
 @state.mcp.tool()
-def scout_act(
+async def scout_act(
     action: str = "",
     value: str | None = None,
     target: str | None = None,
@@ -154,15 +152,16 @@ def scout_act(
     if not state._browser:
         return "Error: call scout_open first."
 
-    tab = state._browser.get_current_tab()
+    page = await state._browser.get_current_page()
+    if page is None:
+        return "Error: no page available."
     tab_id = state._browser.current_tab_id()
     pool = state.get_pool()
 
     if actions:
         report_lines = [f"{state.prefix(tab_id)}", f"Action chain ({len(actions)} steps):\n"]
         for step in actions:
-            report_lines.append(_do_action(tab, pool, step))
-        total = sum(len(a) for a in report_lines)
+            report_lines.append(await _do_action(page, pool, step))
         return "\n".join(report_lines)
 
     step = {"action": action}
@@ -171,12 +170,12 @@ def scout_act(
     if target is not None:
         step["target"] = target
     report_lines = [state.prefix(tab_id), ""]
-    report_lines.append(_do_action(tab, pool, step))
+    report_lines.append(await _do_action(page, pool, step))
     return "\n".join(report_lines)
 
 
 @state.mcp.tool()
-def scout_login(timeout: int = 300) -> str:
+async def scout_login(timeout: int = 300) -> str:
     """Wait for the user to manually log in via the browser window.
 
     Detects login by polling cookies: if cookie names change or ≥2 values
@@ -192,11 +191,15 @@ def scout_login(timeout: int = 300) -> str:
     if not state._browser:
         return "Error: call scout_open first."
 
-    detector = LoginDetector(state._browser.get_current_tab())
-    result = detector.wait_for_login(timeout)
+    page = await state._browser.get_current_page()
+    if page is None:
+        return "Error: no page available."
+
+    detector = LoginDetector(page)
+    result = await detector.wait_for_login(timeout)
 
     if result:
-        text = state._browser.get_text()
+        text = await state._browser.get_text()
         return (f"{state.current_prefix()}\n"
                 f"Login successful!\n\n"
                 f"Page text:\n{text[:2000]}\n\n"

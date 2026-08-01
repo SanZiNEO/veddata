@@ -1,15 +1,16 @@
 """Shared state and helper functions for Web Scout tools."""
 
 from web_scout.browser import BrowserSession
-from web_scout.network_pool import NetworkPool
-from web_scout.dom import DOMScanner
-from web_scout.login import LoginDetector
+from web_scout.network_monitor import NetworkMonitor
+from web_scout.dom import DOMTree
+from web_scout.scripts import ScriptRegistry
 from web_scout.export import Exporter
 
 _browser: BrowserSession | None = None
-_api_pool: NetworkPool | None = None
-_dom_scanners: dict[str, DOMScanner] = {}
-_login: LoginDetector | None = None
+_api_pool: NetworkMonitor | None = None
+_dom_trees: dict[str, DOMTree] = {}
+_script_registries: dict[str, ScriptRegistry] = {}
+_watches: dict[str, object] = {}          # tab_id → WatchEngine（按需创建）
 _exporter: Exporter | None = None
 _response_dir: str | None = None
 
@@ -17,28 +18,36 @@ from fastmcp import FastMCP
 mcp: FastMCP = None
 
 
-def get_pool() -> NetworkPool | None:
+async def attach_page(page) -> None:
+    """Wire a freshly registered page to shared capture components.
+
+    - NetworkMonitor: 全局单例，注入 page→tab_id 反查。
+    - ScriptRegistry: 每页一个，attach 后收集 scriptParsed（须在 goto 前）。
+    """
+    global _api_pool
+    if _api_pool is None:
+        _api_pool = NetworkMonitor()
+    _api_pool.attach(page, lambda p: _browser._page_to_id.get(id(p)))
+
+    tab_id = _browser._page_to_id.get(id(page))
+    if tab_id and tab_id not in _script_registries:
+        try:
+            cdp = await page.context.new_cdp_session(page)
+            registry = ScriptRegistry(page, cdp)
+            await registry.attach(cdp)
+            _script_registries[tab_id] = registry
+        except Exception:
+            pass
+
+
+def get_pool() -> NetworkMonitor | None:
     global _api_pool
     return _api_pool
 
 
-def set_pool(pool: NetworkPool | None):
+def set_pool(pool: NetworkMonitor | None):
     global _api_pool
     _api_pool = pool
-
-
-def resolve_tab_str(tab: str = "") -> tuple[str, list, DOMScanner | None]:
-    """Resolve tab short-ID → (full_tab_id, api_records_for_tab, dom_scanner).
-
-    tab="" → current active tab.
-    """
-    if not _browser:
-        return ("", [], None)
-    tab_id = _browser.resolve_tab_id(tab)
-    pool = get_pool()
-    records = pool.get_by_tab(tab_id) if pool else []
-    dom = _dom_scanners.get(tab_id)
-    return (tab_id, records, dom)
 
 
 def prefix(tab_id_str: str) -> str:

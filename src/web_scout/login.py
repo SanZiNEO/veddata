@@ -5,14 +5,14 @@
   2. ≥2 个 cookie 的值同时变化 → 登录（过滤单 cookie 轮换噪声）
 """
 
+import asyncio
 import json
-import time
 
 
-def _cookie_snapshot(tab) -> str:
+async def _cookie_snapshot(page) -> str:
     """Serialize cookies sorted by name for stable comparison."""
     try:
-        c = tab.cookies(all_domains=False, all_info=False)
+        c = await page.context.cookies()
         return json.dumps(sorted(c, key=lambda x: x["name"]), ensure_ascii=False)
     except Exception:
         return ""
@@ -21,9 +21,8 @@ def _cookie_snapshot(tab) -> str:
 def _is_login(before: str, after: str) -> bool:
     """Compare two cookie snapshots, return True if login is detected.
 
-    Rules:
-      1. name set 变化 → login
-      2. ≥2 values change simultaneously → login (filters single-cookie noise)
+    Rule 1: cookie name set changed → login.
+    Rule 2: ≥2 values changed at the same time → login.
     """
     if not before or not after or before == after:
         return False
@@ -49,38 +48,41 @@ def _is_login(before: str, after: str) -> bool:
 class LoginDetector:
     """Detect login by polling cookies, wait for manual user login."""
 
-    def __init__(self, tab):
-        self.tab = tab
+    def __init__(self, page):
+        self.page = page
         self._snapshot: str = ""
 
-    def take_snapshot(self):
+    async def take_snapshot(self):
         """Store current cookies as login-detection baseline."""
-        self._snapshot = _cookie_snapshot(self.tab)
+        self._snapshot = await _cookie_snapshot(self.page)
 
-    def wait_for_login(self, timeout: int = 300) -> bool:
+    async def wait_for_login(self, timeout: int = 300) -> bool:
         """Wait for the user to manually log in.
 
         Polls cookies every 0.5s; returns True when login detected,
         False on timeout.  Calls take_snapshot() at start.
         """
-        self.take_snapshot()
+        await self.take_snapshot()
         if not self._snapshot:
-            time.sleep(1)
-            self.take_snapshot()
+            await asyncio.sleep(1)
+            await self.take_snapshot()
 
         check_interval = 0.5
         elapsed = 0.0
 
         while elapsed < timeout:
-            time.sleep(check_interval)
+            await asyncio.sleep(check_interval)
             elapsed += check_interval
-            current = _cookie_snapshot(self.tab)
+            current = await _cookie_snapshot(self.page)
 
             if _is_login(self._snapshot, current):
                 print(f"Login detected ({elapsed:.0f}s)")
-                self._handle_verify()
-                time.sleep(3)
-                self.tab.get(self.tab.url)
+                await self._handle_verify()
+                await asyncio.sleep(3)
+                try:
+                    await self.page.reload()
+                except Exception:
+                    pass
                 return True
 
             if elapsed % 10 < check_interval:
@@ -88,7 +90,7 @@ class LoginDetector:
 
         return False
 
-    def _handle_verify(self):
+    async def _handle_verify(self):
         """Wait for any verification popup to be manually resolved."""
         verify_selectors = [
             ".nc_wrapper", ".g-recaptcha", ".h-captcha", ".cf-turnstile",
@@ -111,8 +113,11 @@ class LoginDetector:
             triggered = False
             for sel in verify_selectors:
                 try:
-                    el = self.tab.ele(sel, timeout=1)
-                    if el:
+                    if sel.startswith("text="):
+                        locator = self.page.get_by_text(sel[5:]).first
+                    else:
+                        locator = self.page.locator(sel).first
+                    if await locator.is_visible(timeout=1000):
                         triggered = True
                         break
                 except Exception:
@@ -120,4 +125,4 @@ class LoginDetector:
             if not triggered:
                 break
             print("Security verification detected, please complete in browser...")
-            time.sleep(2)
+            await asyncio.sleep(2)

@@ -1,12 +1,12 @@
-"""Request executor — send HTTP requests via SessionPage with cookie sync."""
+"""Request executor — send HTTP requests via httpx with cookie sync."""
 
 import json
 import time
 
-from DrissionPage import SessionPage
+import httpx
 
 
-def exec_request(
+async def exec_request(
     record: dict,
     override_params: str = "",
     override_body: str = "",
@@ -25,18 +25,7 @@ def exec_request(
     Returns:
         Formatted response string.
     """
-    page = SessionPage()
-
     from web_scout import state
-    if tab_id and state._browser:
-        try:
-            tab_obj = state._browser.get_tab_by_id(tab_id)
-            if tab_obj:
-                cookies_list = tab_obj.cookies(all_domains=False, all_info=False)
-                if cookies_list:
-                    page.set.cookies({c['name']: c['value'] for c in cookies_list})
-        except Exception:
-            pass
 
     url = record.get("url", "").split("?")[0]
     method = record.get("method", "GET")
@@ -58,13 +47,15 @@ def exec_request(
     if method.upper() == "GET" and override_body:
         method = "POST"
 
-    # Inject X-XSRF-TOKEN from XSRF-TOKEN cookie if available
+    # Cookie sync from the browser tab + XSRF-TOKEN injection
+    cookie_header = ""
     if tab_id and state._browser:
         try:
-            tab_obj = state._browser.get_tab_by_id(tab_id)
-            if tab_obj:
-                xsrf_cookies = tab_obj.cookies(all_domains=False, all_info=False)
-                xsrf = next((c["value"] for c in xsrf_cookies if c["name"] == "XSRF-TOKEN"), "")
+            page = await state._browser.get_page_by_id(tab_id)
+            if page:
+                cookies = await page.context.cookies(urls=[url])
+                cookie_header = "; ".join(f"{c['name']}={c['value']}" for c in cookies)
+                xsrf = next((c["value"] for c in cookies if c["name"] == "XSRF-TOKEN"), "")
                 if xsrf:
                     req_headers["X-XSRF-TOKEN"] = xsrf
         except Exception:
@@ -74,33 +65,36 @@ def exec_request(
     for k, v in req_headers.items():
         if k.lower() not in ("cookie", "content-length", "host"):
             extra_headers[k] = v
+    if cookie_header:
+        extra_headers["Cookie"] = cookie_header
 
     t0 = time.perf_counter()
     try:
-        if method.upper() == "GET":
-            success = page.get(url, params=req_params, headers=extra_headers)
-        elif method.upper() == "POST":
-            if isinstance(req_body, dict):
-                success = page.post(url, json=req_body, params=req_params, headers=extra_headers)
-            elif isinstance(req_body, str):
-                success = page.post(url, data=req_body, params=req_params, headers=extra_headers)
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            if method.upper() == "GET":
+                resp = await client.get(url, params=req_params, headers=extra_headers)
+            elif method.upper() == "POST":
+                if isinstance(req_body, dict):
+                    resp = await client.post(url, json=req_body, params=req_params, headers=extra_headers)
+                elif isinstance(req_body, str):
+                    resp = await client.post(url, data=req_body, params=req_params, headers=extra_headers)
+                else:
+                    resp = await client.post(url, params=req_params, headers=extra_headers)
             else:
-                success = page.post(url, params=req_params, headers=extra_headers)
-        else:
-            page.session.request(
-                method.upper(), url, params=req_params,
-                json=req_body if isinstance(req_body, dict) else None,
-                data=req_body if isinstance(req_body, str) else None,
-                headers=extra_headers,
-            )
-            success = page.response is not None
+                resp = await client.request(
+                    method.upper(),
+                    url,
+                    params=req_params,
+                    json=req_body if isinstance(req_body, dict) else None,
+                    data=req_body if isinstance(req_body, str) else None,
+                    headers=extra_headers,
+                )
         elapsed_ms = (time.perf_counter() - t0) * 1000
     except Exception as e:
         return f"Request failed: {e}"
 
     tab_short = tab_id[:8] if tab_id else "?"
-    resp = page.response
-    status_code = resp.status_code if resp else 0
+    status_code = resp.status_code
     lines = [f"[{tab_short}] {url}"]
     lines.append(f"Status: {status_code}  |  Time: {elapsed_ms:.0f}ms")
     lines.append("")
@@ -112,18 +106,11 @@ def exec_request(
         lines.append(f"Body: {json.dumps(req_body, ensure_ascii=False)}")
     lines.append("")
     lines.append("=== Response Headers ===")
-    if resp:
-        for k, v in dict(resp.headers).items():
-            lines.append(f"  {k}: {v}")
+    for k, v in dict(resp.headers).items():
+        lines.append(f"  {k}: {v}")
     lines.append("")
     lines.append("=== Response Body (first 3000 chars) ===")
-    if resp:
-        try:
-            body_text = resp.text
-        except Exception:
-            body_text = str(resp.content)
-    else:
-        body_text = "(no response)"
+    body_text = resp.text
     if len(body_text) > 3000:
         body_text = body_text[:3000] + "\n... (truncated)"
     lines.append(body_text)

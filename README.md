@@ -12,6 +12,7 @@
 ## 定位
 
 **Web Scout 是一个发现工具，不是爬虫。**
+**也不是通用浏览器**——浏览网页有其他 MCP 工具更合适，这里页面访问只是发现数据源的前置步骤。
 
 | ✅ 做的 | ❌ 不做的 |
 |---------|----------|
@@ -70,49 +71,56 @@ pip install -e .
 | `LOGIN_TIMEOUT` | `"300"` | 登录最大等待秒数 |
 | `MAX_TEXT_LENGTH` | `"3000"` | scout_open 页面文本最大字符数 |
 | `RESPONSE_DIR` | `"./response"` | 数据导出默认目录，可用 `output_dir` 参数覆盖 |
-
-## 工具（21 个）
+## 工具（29 个）
 
 ### 导航（6 个）
 | 工具 | 说明 |
 |------|------|
-| `scout_open` | 启动/接管 Chromium，清空旧标签页。不导航 |
-| `scout_goto` | 导航到 URL，监听 API，返回页面文本 + 元素 + API 摘要。支持 `new_tab` 参数 |
+| `scout_open` | 启动数据发现会话，打开浏览器开始捕获页面数据源。不导航 |
+| `scout_goto` | 导航到目标页面，自动发现所有数据来源：返回 DOM 树 + 数据源清单 + 操作列表 |
 | `scout_close` | 关闭整个浏览器，清空所有数据 |
 | `scout_tabs` | 列出所有标签页，标注当前活跃 |
 | `scout_tab_switch` | 切换到指定标签页（短 ID 前缀匹配） |
-| `scout_tab_close` | 关闭指定标签页，清理其 API 记录。支持逗号分隔批量关闭 |
+| `scout_tab_close` | 关闭指定标签页，清理其数据记录。支持逗号分隔批量关闭 |
 
-### 观察（4 个）
+### 观察（7 个）
 | 工具 | 说明 |
 |------|------|
-| `scout_fetch` | 滚动到底 → 全量 innerText + AXTree 链接 → 缓存文件 → 分段读取 |
+| `scout_fetch` | 获取页面全文（滚动到底 + innerText + 链接），辅助定位数据关键词 |
 | `scout_screenshot` | 截取当前页面（可视区域或整页） |
-| `scout_elements` | 可交互元素 + DOM 容器 v3 + Common Actions |
+| `scout_dom_tree` | 输出 DOM 目录树（内存快照）：容器/字段/交互标记，导航后自动重扫 |
+| `scout_dom_search` | 在内存 DOM 树中搜文本/属性/id，返回节点路径 |
+| `scout_dom_locate` | 按路径定位节点（如 `div.content > div.post-list > article:nth-child(3)`） |
 | `scout_cookies` | 查看 cookie（当前域或全部，摘要或完整信息）。指定 tab 获取对应标签页 |
+| `scout_console` | 操作页面控制台：执行 JS / 查看 log/warn/error 消息 |
 
 ### 交互（2 个）
 | 工具 | 说明 |
 |------|------|
-| `scout_act` | 链式操作（input/scroll/click/select），每步报告新增 API method + path |
+| `scout_act` | 链式操作（input/scroll/click/select），每步报告新增数据记录 + 触发上下文 |
 | `scout_login` | 等待用户在浏览器中手动登录，通过 cookie 变化检测 |
 
-### 发现（8 个）
+### 发现（13 个）
 | 工具 | 说明 |
 |------|------|
-| `scout_apis` | 列出所有捕获的 API 端点，支持关键词和 tab 过滤 |
-| `scout_inspect` | 查看 API 的完整请求/响应，支持逗号分隔多 ID |
-| `scout_search` | 全局搜索：API 响应体 → 页面源码 → DOM，支持逗号分隔多关键词 |
+| `scout_apis` | 列出已捕获的所有数据（网络请求、内嵌数据、JS 变量），每条带触发时机，不贴类型标签 |
+| `scout_inspect` | 查看数据的完整请求/响应，支持逗号分隔多 ID |
+| `scout_search` | 跨数据源搜索：网络 → 内嵌 → 脚本源码 → DOM，支持逗号分隔多关键词 |
 | `scout_context` | 搜索关键词返回精确字段路径 + 采样值，支持逗号分隔多关键词 |
-| `scout_export` | 导出 API：字段文档 + 原始 JSON，支持逗号分隔多 ID，`output_dir` 指定目录 |
-| `scout_export_all` | 批量导出所有已捕获的 API |
-| `scout_peek` | 打开页面 → 监听 → 按路径匹配 API → 一步返回详情 |
+| `scout_watch` | 批量观测：注册请求/JS 断点观测点 → 触发 → 一次取回全部变量快照 |
+| `scout_list_scripts` | 列出页面所有 JS 脚本的 URL、大小和行数 |
+| `scout_search_scripts` | 全局搜索所有 JS 源码（支持 /regex/） |
+| `scout_script_source` | 查看单个脚本源码，支持搜索高亮和上下文 |
+| `scout_trace_value` | 值追踪：一个值在 JS 源码/网络/DOM/变量/WS 中流经的所有位置 |
+| `scout_export` | 导出数据：字段文档 + 原始 JSON，支持逗号分隔多 ID |
+| `scout_export_all` | 批量导出所有已捕获的数据 |
+| `scout_peek` | 打开页面 → 自动捕获 → 按路径匹配数据 → 一步返回详情 |
 | `scout_request` | 重放 HTTP 请求（复用捕获参数或自定义），自动同步浏览器 cookie |
 
 ### 扫描（1 个）
 | 工具 | 说明 |
 |------|------|
-| `scout_scan` | `mode="all"` 全量扫描（API + SSR + DOM）。`mode="dom"` 关键词扫描 |
+| `scout_scan` | `mode="all"` 全量扫描（API + DOM 树 + 内嵌数据）。`mode="dom"` 关键词扫描 |
 
 ## 推荐工作流
 

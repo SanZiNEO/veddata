@@ -1,29 +1,47 @@
 """Browser module — Chromium lifecycle, tab management, text extraction.
 
-Each tab is identified by its CDP tab_id (full UUID).  Display uses the
+Each tab is identified by a CDP targetId (full UUID).  Display uses the
 first 8 chars as a short ID.  All tab lookups use prefix matching so
 AI can pass the short ID and still locate the full tab.
+
+Playwright async API: one persistent BrowserContext = one session,
+its pages are the tabs.  All methods that touch Playwright are async.
+
+Auto-registration: pages opened by the page itself (target="_blank",
+window.open) are registered automatically via context.on("page") so
+their network traffic joins the shared capture pool, tagged by tab_id.
 """
 
+import asyncio
 import os
+import uuid
 
-from DrissionPage import Chromium, ChromiumOptions
+from playwright.async_api import BrowserContext, Page, Playwright
 
 
 class BrowserSession:
     """Manages a single Chromium instance with multiple tabs.
 
-    Keyed by CDP tab_id (full UUID, 36 chars).  Display uses first 8.
+    Launch modes:
+      - BROWSER_ADDRESS env set  → connect_over_cdp(existing browser)
+      - otherwise                → launch_persistent_context(user_data_dir)
     """
 
     def __init__(self):
-        self._browser: Chromium | None = None
-        self._tabs: dict[str, dict] = {}       # tab_id → {url, title}
-        self._current_tab: str | None = None    # active tab_id
+        self._playwright: Playwright | None = None
+        self._context: BrowserContext | None = None   # persistent context
+        self._pages: dict[str, Page] = {}             # tab_id (CDP targetId) → Page
+        self._page_to_id: dict[int, str] = {}         # id(page) → tab_id
+        self._current_tab: str | None = None          # active tab_id
+        self._auto_page_hook = False
 
-    def _ensure_browser(self) -> Chromium:
-        if self._browser and self._browser.states.is_alive:
-            return self._browser
+    async def _ensure_browser(self) -> BrowserContext:
+        if self._context is not None:
+            return self._context
+
+        from playwright.async_api import async_playwright
+
+        self._playwright = await async_playwright().start()
 
         headless = os.environ.get("HEADLESS", "false") == "true"
         browser_path = os.environ.get("BROWSER_PATH", "")
@@ -31,179 +49,201 @@ class BrowserSession:
         address = os.environ.get("BROWSER_ADDRESS", "")
 
         if address:
-            co = ChromiumOptions().set_address(address)
+            browser = await self._playwright.chromium.connect_over_cdp(address)
+            contexts = browser.contexts
+            self._context = contexts[0] if contexts else await browser.new_context()
         else:
-            use_multi = os.environ.get("MULTI_BROWSER", "false") == "true"
-            for p in (range(9222, 9232) if use_multi else range(9222, 9223)):
-                try:
-                    co = ChromiumOptions().set_local_port(p)
-                    break
-                except Exception:
-                    continue
-            if headless:
-                co.headless(True)
-            if browser_path == "edge":
-                co.set_browser_path(edge=True)
-            elif browser_path:
-                co.set_browser_path(browser_path)
-            if user_data:
-                co.set_user_data_path(user_data)
+            channel = "msedge" if browser_path == "edge" else (browser_path or None)
+            self._context = await self._playwright.chromium.launch_persistent_context(
+                user_data_dir=user_data or ".web-scout-data",
+                headless=headless,
+                channel=channel,
+            )
 
-        self._browser = Chromium(co)
-        return self._browser
+        # 自动注册页面自身打开的新 tab（弹窗 / target=_blank）
+        if not self._auto_page_hook:
+            self._auto_page_hook = True
+            self._context.on("page", self._on_new_page)
 
-    def open(self, url: str) -> dict:
-        """Open a URL in a tab. Reuses blank tab or creates new one.
+        return self._context
 
-        Returns:
-            dict with keys: tab_id, title, text
-        """
-        browser = self._ensure_browser()
+    # ---- 自动注册（页面自身打开的新标签页） ----
 
-        for tid in browser.tab_ids:
-            try:
-                tab = browser.get_tab(tid)
-                tab_url = str(tab.url or "")
-                if tab_url in ("about:blank", "", "chrome://newtab/"):
-                    tab.get(url)
-                    self._register_tab(tab)
-                    return self._extract_page_info(tab)
-            except Exception:
-                continue
+    def _on_new_page(self, page: Page) -> None:
+        """sync 回调：派发到事件循环执行异步注册，不抢占当前 tab。"""
+        asyncio.create_task(self._auto_register(page))
 
-        tab = browser.new_tab(url)
-        self._register_tab(tab)
-        return self._extract_page_info(tab)
+    async def _auto_register(self, page: Page) -> None:
+        await self._register_tab(page, set_current=False)
+        page.on("close", lambda _p=page: self._unregister_tab(_p))
 
-    def _register_tab(self, tab) -> None:
-        tid = tab.tab_id
-        self._tabs[tid] = {
-            "url": str(tab.url or ""),
-            "title": str(tab.title or ""),
-        }
-        self._current_tab = tid
+    async def _register_tab(self, page: Page, set_current: bool = True) -> None:
+        """Register a page as a tab, keyed by CDP targetId (fallback uuid4)."""
+        tid = ""
+        try:
+            session = await page.context.new_cdp_session(page)
+            info = await session.send("Target.getTargetInfo")
+            tid = info.get("targetInfo", {}).get("targetId", "")
+        except Exception:
+            tid = ""
+        if not tid:
+            tid = uuid.uuid4().hex
+        self._pages[tid] = page
+        self._page_to_id[id(page)] = tid
+        if set_current:
+            self._current_tab = tid
+        # 事件监听统一挂接点（monitor / script registry / console）
+        from web_scout import state
+        await state.attach_page(page)
+
+    def _unregister_tab(self, page: Page) -> None:
+        """页面关闭时清理其所有追踪状态。"""
+        tid = self._page_to_id.pop(id(page), None)
+        if tid is None:
+            return
+        self._pages.pop(tid, None)
+        from web_scout import state
+        state._dom_trees.pop(tid, None)
+        state._script_registries.pop(tid, None)
+        state._watches.pop(tid, None)
+        pool = state.get_pool()
+        if pool:
+            pool.prune(tid)
+        if self._current_tab == tid:
+            remaining = list(self._pages)
+            self._current_tab = remaining[0] if remaining else None
+
+    async def open(self, url: str) -> dict:
+        """Open a URL in a tab. Reuses blank tab or creates new one."""
+        context = await self._ensure_browser()
+        page = None
+        for p in context.pages:
+            if p.url in ("about:blank", "", "chrome://newtab/"):
+                page = p
+                break
+        if page is None:
+            page = await context.new_page()
+        await self._register_tab(page)
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        except Exception as e:
+            return {"tab_id": self.current_tab_id(), "title": "", "text": f"Failed to navigate: {e}"}
+        return await self._extract_page_info(page)
 
     def current_tab_id(self) -> str:
         return self._current_tab or ""
 
     def get_tab_url(self, tab_id_str: str) -> str:
         tid = self.resolve_tab_id(tab_id_str)
-        if not tid:
+        page = self._pages.get(tid) if tid else None
+        if page is None:
             return ""
-        info = self._tabs.get(tid, {})
-        return (info.get("url") or "")[:60]
+        return (page.url or "")[:60]
 
     def resolve_tab_id(self, short_id: str) -> str | None:
-        """Prefix-match a short ID to a full CDP tab_id.
-
-        Empty string defaults to current tab.
-        """
+        """Prefix-match a short ID to a full tab_id."""
         if not short_id:
-            return self._current_tab
-        if not self._browser:
             return None
-        for tid in self._browser.tab_ids:
+        for tid in self._pages:
             if tid.startswith(short_id):
                 return tid
         return None
 
-    def get_current_tab(self):
-        browser = self._ensure_browser()
-        if self._current_tab and self._current_tab in browser.tab_ids:
-            return browser.get_tab(self._current_tab)
-        return browser.latest_tab
-
-    def get_tab_by_id(self, tab_id_str: str):
-        """Get a ChromiumTab by CDP ID or short ID (prefix matched)."""
-        browser = self._ensure_browser()
-        tid = self.resolve_tab_id(tab_id_str)
-        if tid and tid in browser.tab_ids:
-            self._current_tab = tid
-            return browser.get_tab(tid)
+    async def get_current_page(self) -> Page | None:
+        context = await self._ensure_browser()
+        if self._current_tab and self._current_tab in self._pages:
+            return self._pages[self._current_tab]
+        pages = context.pages
+        if pages:
+            self._current_tab = self._page_to_id.get(id(pages[-1]))
+            return pages[-1]
         return None
 
-    def switch_tab(self, tab_id_str: str) -> str:
-        tab = self.get_tab_by_id(tab_id_str)
-        if tab:
+    async def get_page_by_id(self, tab_id_str: str) -> Page | None:
+        """Get a Page by CDP ID or short ID (prefix matched)."""
+        context = await self._ensure_browser()
+        tid = self.resolve_tab_id(tab_id_str)
+        if tid and tid in self._pages:
+            self._current_tab = tid
+            return self._pages[tid]
+        return None
+
+    async def switch_tab(self, tab_id_str: str) -> str:
+        page = await self.get_page_by_id(tab_id_str)
+        if page:
             short = tab_id_str[:8] if len(tab_id_str) >= 8 else tab_id_str
             return f"Switched to tab {short}"
         short = tab_id_str[:8] if len(tab_id_str) >= 8 else tab_id_str
         return f"Tab {short} not found"
 
-    def list_tabs(self) -> str:
-        browser = self._ensure_browser()
-        lines = [f"Open tabs ({len(browser.tab_ids)}):"]
-        for tid in browser.tab_ids:
+    async def list_tabs(self) -> str:
+        context = await self._ensure_browser()
+        lines = [f"Open tabs ({len(self._pages)}):"]
+        for tid, page in self._pages.items():
             try:
-                tab = browser.get_tab(tid)
-                title = (tab.title or "")[:60]
+                title = (await page.title() or "")[:60]
             except Exception:
                 title = ""
             mark = " ← current" if tid == self._current_tab else ""
             lines.append(f"  [{tid[:8]}] {title}{mark}")
         return "\n".join(lines)
 
-    def close_tab(self, tab_id_str: str | None = None) -> str:
-        browser = self._ensure_browser()
+    async def close_tab(self, tab_id_str: str | None = None) -> str:
+        await self._ensure_browser()
         tid = self.resolve_tab_id(tab_id_str) if tab_id_str else self._current_tab
         if not tid:
             return "No tab to close."
-        try:
-            tab = browser.get_tab(tid)
-            tab.close()
-        except Exception:
-            pass
-        self._tabs.pop(tid, None)
-        if tid == self._current_tab:
-            remaining = [t for t in browser.tab_ids if t != tid]
-            self._current_tab = remaining[0] if remaining else None
+        page = self._pages.get(tid)
+        if page is not None:
+            try:
+                await page.close()
+            except Exception:
+                pass
+        self._unregister_tab(page)
         short = tid[:8]
         return f"Tab {short} closed."
 
-    def close(self) -> str:
-        if self._browser:
+    async def close(self) -> str:
+        if self._context is not None:
             try:
-                self._browser.quit(timeout=3, force=True)
+                await self._context.close()
             except Exception:
                 pass
-            self._browser = None
-            self._tabs.clear()
-            self._current_tab = None
-        # 确保 9222 上的进程被清理
-        import subprocess
-        try:
-            result = subprocess.run(
-                ["netstat", "-ano"], capture_output=True, text=True, timeout=10
-            )
-            for line in result.stdout.split("\n"):
-                if ":9222" in line and "LISTENING" in line:
-                    parts = line.strip().split()
-                    if parts:
-                        pid = parts[-1]
-                        subprocess.run(["taskkill", "/f", "/pid", pid],
-                                       capture_output=True, timeout=5)
-                        break
-        except Exception:
-            pass
+            self._context = None
+        if self._playwright is not None:
+            try:
+                await self._playwright.stop()
+            except Exception:
+                pass
+            self._playwright = None
+        self._pages.clear()
+        self._page_to_id.clear()
+        self._current_tab = None
         return "Browser closed."
 
-    def _extract_page_info(self, tab) -> dict:
+    async def _extract_page_info(self, page: Page) -> dict:
         try:
-            tab.wait.eles_loaded('a, button, input', timeout=5, any_one=True)
+            await page.wait_for_load_state("domcontentloaded", timeout=5000)
         except Exception:
             pass
-        title = tab.title or ""
-        text = self._get_text(tab)
+        try:
+            title = await page.title() or ""
+        except Exception:
+            title = ""
+        text = await self._get_text(page)
         return {"tab_id": self.current_tab_id(), "title": title, "text": text}
 
-    def get_text(self) -> str:
-        return self._get_text(self.get_current_tab())
+    async def get_text(self) -> str:
+        page = await self.get_current_page()
+        if page is None:
+            return ""
+        return await self._get_text(page)
 
     @staticmethod
-    def _get_text(tab) -> str:
+    async def _get_text(page: Page) -> str:
         max_len = int(os.environ.get("MAX_TEXT_LENGTH", "3000"))
         try:
-            text = tab.run_js("return document.body.innerText || ''")
+            text = await page.evaluate("document.body.innerText || ''")
             if text:
                 return text[:max_len]
         except Exception:

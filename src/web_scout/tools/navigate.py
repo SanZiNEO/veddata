@@ -1,94 +1,136 @@
 """Navigate tools — browser lifecycle, tab management, navigation."""
 
-import time as _time
+import asyncio
 
 from web_scout import state
 from web_scout.browser import BrowserSession
-from web_scout.network_pool import NetworkPool
-
-
-def _ax_summary(tab) -> str:
-    """Extract visible interactive elements from AXTree with URLs."""
-    try:
-        result = tab.run_cdp('Accessibility.getFullAXTree')
-        nodes = result.get('nodes', [])
-        lines = []
-        for n in nodes:
-            if n.get('ignored', False):
-                continue
-            name = n.get('name', {}).get('value', '')
-            if not name or len(name) < 2:
-                continue
-            role = n.get('role', {}).get('value', '')
-            url = ''
-            for p in n.get('properties', []):
-                if p.get('name') == 'url':
-                    url = p.get('value', {}).get('value', '')
-                    break
-            if url:
-                lines.append(f'[{role}] {name} -> {url}')
-            else:
-                lines.append(f'[{role}] {name}')
-        return '\n'.join(lines)
-    except Exception:
-        return "(AXTree unavailable)"
+from web_scout.network_monitor import NetworkMonitor
+from web_scout.dom import snapshot_tree
 
 
 @state.mcp.tool()
-def scout_open() -> str:
-    """Open / manage the browser session.
+async def scout_open() -> str:
+    """启动数据发现会话。打开浏览器以开始捕获页面数据源。浏览网页是前置步骤，不是终点。
 
-    Finds or launches a Chromium on port 9222.  Clears old tabs and resets
-    the API pool.  Does NOT navigate — use scout_goto() for that.
+    Launches a Playwright Chromium session (persistent context) and clears
+    old state.  Does NOT navigate — use scout_goto() for that.
 
     Returns:
         Browser session status.
     """
-    # 清理接管来的旧浏览器
-    if state._browser and state._browser._browser:
+    # 清理旧会话
+    if state._browser:
         try:
-            if state._browser._browser.states.is_existed:
-                state._browser._browser.quit(timeout=3, force=True)
+            await state._browser.close()
         except Exception:
             pass
         state._browser = None
         state.set_pool(None)
-        state._dom_scanners.clear()
-        state._login = None
+        state._dom_trees.clear()
 
-    if not state._browser:
-        state._browser = BrowserSession()
-
+    state._browser = BrowserSession()
     pool = state.get_pool()
     if not pool:
-        pool = NetworkPool()
-        state.set_pool(pool)
+        state.set_pool(NetworkMonitor())
 
-    # 确保有一个空白标签页
-    browser = state._browser._ensure_browser()
-    for tid in browser.tab_ids:
-        try:
-            tab = browser.get_tab(tid)
-            tab_url = str(tab.url or "")
-            if tab_url in ("about:blank", "", "chrome://newtab/"):
-                state._browser._register_tab(tab)
-                break
-        except Exception:
-            continue
+    # 确保会话就绪：复用空白页；已有内容页则直接用，不新建空白页（避免累积 about:blank）
+    browser = state._browser
+    context = await browser._ensure_browser()
+    blank = None
+    for p in context.pages:
+        if p.url in ("about:blank", "", "chrome://newtab/"):
+            blank = p
+            break
+    if blank is not None:
+        await browser._register_tab(blank)
+    elif not context.pages:
+        blank = await context.new_page()
+        await browser._register_tab(blank)
     else:
-        tab = browser.new_tab()
-        state._browser._register_tab(tab)
+        # 已有内容页：注册全部未注册页，第一个设为当前
+        for p in context.pages:
+            if id(p) not in browser._page_to_id:
+                await browser._register_tab(p, set_current=False)
+        if browser.current_tab_id() not in browser._pages:
+            first = context.pages[0]
+            tid = browser._page_to_id.get(id(first))
+            if tid:
+                browser._current_tab = tid
 
     return "Browser ready. Call scout_goto(url) to navigate."
 
 
-@state.mcp.tool()
-def scout_goto(url: str, new_tab: bool = False) -> str:
-    """Navigate to a URL and capture API requests.
+def _summarize_body(body, max_keys: int = 6) -> str:
+    """顶层键摘要：{key: type, ...}"""
+    if isinstance(body, dict):
+        parts = []
+        for k, v in list(body.items())[:max_keys]:
+            t = type(v).__name__
+            if isinstance(v, list):
+                t = f"[{len(v)}]"
+            elif isinstance(v, dict):
+                t = "{...}"
+            parts.append(f"{k}: {t}")
+        return "{" + ", ".join(parts) + "}"
+    if isinstance(body, list):
+        return f"[{len(body)} items]"
+    return str(body)[:80]
 
-    Starts network monitoring BEFORE navigating (required: listen.start()
-    must precede any action that triggers requests).  Returns page text
-    and interactive elements.
+
+def _format_data_line(rec: dict) -> list[str]:
+    """一条 Captured Data 记录的三行描述（不带类型标签）。"""
+    if rec.get("method") == "-" and rec.get("ws_messages") is not None:
+        return [
+            f"[{rec['id']}] - {rec['source']}",
+            f"    触发: {rec.get('trigger', '?')}",
+            "    状态: 已连接，等待消息",
+        ]
+    if rec.get("method") == "-":
+        body = rec.get("response_body", {})
+        if isinstance(body, dict) and "sample" in body:
+            content = f"{body.get('type', '?')} 变量，样本: {str(body.get('sample', ''))[:60]}"
+        else:
+            content = _summarize_body(body)
+        return [
+            f"[{rec['id']}] - {rec['source']}",
+            f"    触发: {rec.get('trigger', '?')}",
+            f"    内容: {content} → {rec['field_count']} fields",
+        ]
+    line = f"[{rec['id']}] {rec['method']} {rec['path']}"
+    params = rec.get("request_params") or {}
+    if params:
+        qs = "&".join(f"{k}={v}" for k, v in list(params.items())[:4])
+        line += f" → ?{qs[:60]}"
+    return [
+        line,
+        f"    触发: {rec.get('trigger', '?')}",
+        f"    响应: {_summarize_body(rec.get('response_body', {}))} → {rec['field_count']} fields",
+    ]
+
+
+def _format_actions(tree) -> list[str]:
+    """从树快照收集交互节点，格式：类型  选择器 文本/占位符"""
+    lines = []
+    for tag in ("input", "button", "a", "select"):
+        for node in tree.find_tag(tag):
+            if tag == "a" and "href" not in node.attrs:
+                continue
+            label = node.text or node.attrs.get("placeholder") or node.attrs.get("aria-label") or ""
+            if not label and tag in ("input", "select"):
+                continue
+            name = {"input": "输入框", "button": "按钮", "a": "链接", "select": "选择框"}[tag]
+            lines.append(f"{name}    {node.selector}  {label[:40]}")
+            if len(lines) >= 15:
+                return lines
+    return lines
+
+
+@state.mcp.tool()
+async def scout_goto(url: str, new_tab: bool = False) -> str:
+    """导航到目标页面，自动发现所有数据来源。返回 DOM 结构、网络请求、内嵌数据的完整清单。
+
+    Starts network monitoring BEFORE navigating (event-driven attach happens
+    at tab registration, which precedes goto).
 
     Use new_tab=True to open in a new tab while keeping the current page.
 
@@ -97,84 +139,104 @@ def scout_goto(url: str, new_tab: bool = False) -> str:
         new_tab: True = create new tab; False = navigate current tab.
 
     Returns:
-        Page title, tab context, AXTree elements, and captured API summary.
+        DOM tree + captured data list + actions.
     """
     if not state._browser:
         return "Error: call scout_open first."
 
     pool = state.get_pool()
     if not pool:
-        pool = NetworkPool()
+        pool = NetworkMonitor()
         state.set_pool(pool)
 
+    browser = state._browser
     if new_tab:
-        browser = state._browser._ensure_browser()
-        tab = browser.new_tab()
-        state._browser._register_tab(tab)
+        context = await browser._ensure_browser()
+        page = await context.new_page()
+        await browser._register_tab(page)
     else:
-        tab = state._browser.get_current_tab()
+        page = await browser.get_current_page()
+        if page is None:
+            return "Error: no page available."
 
-    tab_id = tab.tab_id
-    pool.start_tab(tab)
+    tab_id = browser.current_tab_id()
+    pool.reset_trigger()
 
     try:
-        tab.get(url)
+        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
     except Exception as e:
         return f"Failed to navigate: {e}"
 
-    _time.sleep(3)
-    pool.step(timeout=8.0, tab=tab)
+    try:
+        await page.wait_for_load_state("domcontentloaded")
+    except Exception:
+        pass
+    await asyncio.sleep(2)
 
-    # 获取页面标题和内文
-    title = tab.title or ""
-    text = tab.run_js("return document.body.innerText || ''") or ""
-    elements = _ax_summary(tab)
+    try:
+        await pool.scan_embedded(page)
+    except Exception:
+        pass
 
-    # 刚捕获的 API 摘要
+    try:
+        title = await page.title() or ""
+    except Exception:
+        title = ""
+
+    tree = await snapshot_tree(page)
+    tree.tab_id = tab_id
+    state._dom_trees[tab_id] = tree
+
     records = pool.get_by_tab(tab_id)
-    api_summary = "\n".join(
-        f"  [{r['id']}] {r['method']} {r['path']}  {r['count']} time{'s' if r['count'] > 1 else ''} → {r['field_count']} fields"
-        for r in records[:8]
-    )
-    if len(records) > 8:
-        api_summary += f"\n  ... and {len(records) - 8} more"
-
-    return "\n".join([
+    parts = [
         state.prefix(tab_id),
         f"Title: {title}",
         "",
-        "=== Page Text ===",
-        (text[:2000] + "\n... (truncated)" if len(text) > 2000 else text),
+        "=== DOM Tree ===",
+        tree.format(4),
         "",
-        f"=== Captured APIs ({len(records)}) ===",
-        api_summary,
-        "",
-        "=== Elements ===",
-        elements,
-    ])
+        f"=== Captured Data ({len(records)} items) ===",
+    ]
+    for rec in records[:12]:
+        parts.extend(_format_data_line(rec))
+    if len(records) > 12:
+        parts.append(f"... and {len(records) - 12} more")
+    parts.append("")
+    parts.append("=== Actions ===")
+    actions = _format_actions(tree)
+    if actions:
+        parts.extend(actions)
+    else:
+        parts.append("(no interactive elements found)")
+    parts.append("  → 操作后调用 scout_apis 查看新数据")
+    return "\n".join(parts)
 
 
 @state.mcp.tool()
-def scout_close() -> str:
+async def scout_close() -> str:
     """Close the browser and clear all captured data.
 
-    Kills the Chromium process on port 9222 and resets all state.
+    Closes the Playwright context and resets all state.
 
     Returns:
         Status message.
     """
     if state._browser:
-        state._browser.close()
+        try:
+            await state._browser.close()
+        except Exception:
+            pass
         state._browser = None
     state.set_pool(None)
-    state._dom_scanners.clear()
-    state._login = None
+    state._dom_trees.clear()
+    state._script_registries.clear()
+    state._watches.clear()
     state._exporter = None
     return "Browser closed. All data cleared."
 
 
 @state.mcp.tool()
-def scout_tabs() -> str:
+async def scout_tabs() -> str:
     """List all open browser tabs with CDP short IDs.
 
     Returns:
@@ -182,11 +244,11 @@ def scout_tabs() -> str:
     """
     if not state._browser:
         return "No browser session. Call scout_open first."
-    return state._browser.list_tabs()
+    return await state._browser.list_tabs()
 
 
 @state.mcp.tool()
-def scout_tab_switch(tab: str) -> str:
+async def scout_tab_switch(tab: str) -> str:
     """Switch the active tab by CDP short ID (from scout_tabs output).
 
     After switching, scout_goto() targets the new tab.
@@ -200,7 +262,7 @@ def scout_tab_switch(tab: str) -> str:
     if not state._browser:
         return "No browser session. Call scout_open first."
 
-    result = state._browser.switch_tab(tab)
+    result = await state._browser.switch_tab(tab)
     if "not found" in result:
         return result
     tid = state._browser.current_tab_id()
@@ -208,7 +270,7 @@ def scout_tab_switch(tab: str) -> str:
 
 
 @state.mcp.tool()
-def scout_tab_close(tab: str = "") -> str:
+async def scout_tab_close(tab: str = "") -> str:
     """Close browser tab(s) by CDP short ID and prune their API records.
 
     Supports comma-separated IDs for batch close (e.g. "C724404D,5FD84E84").
@@ -229,10 +291,12 @@ def scout_tab_close(tab: str = "") -> str:
 
     for short_id in tab_ids_to_close:
         tid = state._browser.resolve_tab_id(short_id) or short_id
-        result = state._browser.close_tab(short_id)
+        result = await state._browser.close_tab(short_id)
         results.append(f"{result}")
         if pool:
             pool.prune(tid)
-        state._dom_scanners.pop(tid, None)
+        state._dom_trees.pop(tid, None)
+        state._script_registries.pop(tid, None)
+        state._watches.pop(tid, None)
 
     return "\n".join(results) if len(results) > 1 else results[0]
