@@ -2,28 +2,18 @@
 
 为什么不用 Playwright 启动浏览器
 --------------------------------
-Playwright 用 ``--remote-debugging-pipe`` 连接，并且**由它决定**一长串启动开关
-（``--disable-features=…``、``--disable-infobars``、``--use-mock-keychain``、
-``--disable-sync`` …）。实测同一份 ``chrome.exe``（Chrome 152）：
-
-============================  ==================================  ===================
-启动方式                       页面上能看到的                       结果
-============================  ==================================  ===================
-Playwright 默认（自带 Chromium） ``chrome-headless-shell``、无 ``window.chrome``  boss 直聘自毁页面
-Playwright ``channel=chrome``  ``--remote-debugging-pipe`` → ``webdriver=true``  同上
-Playwright + 去 automation      同上（该开关与 webdriver 无关）      同上
-**自起 Chrome + CDP 端口**      ``webdriver=false``、无注入痕迹、真 UA  页面完好
-============================  ==================================  ===================
-
-所以：**我们自己 Popen 一个普通 Chrome**，只给调试端口和 profile；Playwright 通过
-``connect_over_cdp`` 当纯 CDP 客户端 —— 异步 API、CDP session、init script 全部保留。
+Playwright 用 ``--remote-debugging-pipe``，并附加它自己一长串启动开关；实测同一份
+``chrome.exe``：pipe → ``navigator.webdriver=true``（boss 直聘据此自毁页面）；
+自起 Chrome + ``--remote-debugging-port`` → ``webdriver=false``、无注入痕迹、正常 UA。
 
 三条实用设计
 ------------
-1. **profile 里记端口**（``.veddata-browser.json``）：重连时先看已有实例是否还活着，
-   活着就复用。这样 MCP 服务重启、或用户在窗口里登录/过完验证之后，会话不会丢。
-2. **生命周归自己管**：我们起的浏览器由我们关（``stop()``）；接管别人的只断开。
-3. **找不到 Chrome 不硬失败**：交给上层回退到 Playwright 启动（那时只能接受指纹）。
+1. **profile 里记端口与 pid**（``.veddata-browser.json``）：重连时先看已有实例是否还活着，
+   活着就复用 —— MCP 服务重启、用户登录/过验证之后会话都不丢。
+2. **生命周期归自己管**：我们起的、以及档案里记着 pid 的那个，``close_running`` 能真关掉；
+   只有 ``BROWSER_ADDRESS`` 指定的外部浏览器才只断开。
+3. **启动失败不重试**：profile 被另一个 Chrome 占用时，多试一次就是多开一个窗口 ——
+   只起一次，失败就把事实（pid / 端口 / 退出码 / profile 路径）报出来。
 """
 
 from __future__ import annotations
@@ -39,12 +29,11 @@ from pathlib import Path
 
 PORT_FILE = ".veddata-browser.json"
 _READY_TIMEOUT = 25.0
-_START_ATTEMPTS = 4
 _CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
 
 class ChromiumError(RuntimeError):
-    """起不来 / 找不到浏览器。"""
+    """起不来 / 找不到浏览器 / profile 被占用。"""
 
 
 def free_port() -> int:
@@ -55,17 +44,7 @@ def free_port() -> int:
 
 
 def build_args(path: str, port: int, profile: Path, headless: bool) -> list[str]:
-    """自起 Chrome 的参数：**只要最少的**，绝不带自动化开关。
-
-    Args:
-        path: 浏览器可执行文件。
-        port: CDP 调试端口。
-        profile: user-data-dir（持久 profile）。
-        headless: ``True`` → 新式无头。
-
-    Returns:
-        完整命令行列表（第一项是可执行文件）。
-    """
+    """自起 Chrome 的参数：**只要最少的**，绝不带自动化开关。"""
     args = [
         path,
         f"--remote-debugging-port={port}",
@@ -142,7 +121,6 @@ def _from_path(names: list[str]) -> str | None:
 
 
 def find_chrome() -> str | None:
-    """系统里的 Chrome（注册表 → 常见路径 → PATH）。"""
     if sys.platform == "darwin":
         for candidate in ("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
                           "/Applications/Chromium.app/Contents/MacOS/Chromium"):
@@ -154,7 +132,6 @@ def find_chrome() -> str | None:
 
 
 def find_edge() -> str | None:
-    """系统里的 Edge（Chrome 的替补）。"""
     if sys.platform == "darwin":
         candidate = "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
         return candidate if Path(candidate).exists() else None
@@ -163,14 +140,7 @@ def find_edge() -> str | None:
 
 
 def browser_path() -> str | None:
-    """按 ``BROWSER_PATH`` 决定用哪个浏览器。
-
-    ``BROWSER_PATH`` 取值：
-      - 空 → 自动：Chrome → Edge
-      - ``edge`` / ``msedge`` → 只用 Edge
-      - 绝对/相对路径 → 用这个可执行文件
-      - 其它（``chrome`` 等）→ 当自动处理
-    """
+    """按 ``BROWSER_PATH`` 决定用哪个浏览器（空/未知 → Chrome 优先，其次 Edge）。"""
     raw = os.environ.get("BROWSER_PATH", "").strip()
     if raw:
         lowered = raw.lower()
@@ -185,7 +155,6 @@ def browser_path() -> str | None:
 
 # ---------------- 存活判定 / 端口档案 ----------------
 
-
 def alive(port: int, timeout: float = 1.5) -> bool:
     """CDP 端点是否响应（``/json/version``）。"""
     try:
@@ -196,12 +165,26 @@ def alive(port: int, timeout: float = 1.5) -> bool:
         return False
 
 
+def _read_port_payload(profile: Path) -> dict:
+    try:
+        return json.loads((Path(profile) / PORT_FILE).read_text(encoding="utf-8"))
+    except Exception:                                                           # noqa: BLE001
+        return {}
+
+
 def read_port_file(profile: Path) -> int | None:
     try:
-        payload = json.loads((Path(profile) / PORT_FILE).read_text(encoding="utf-8"))
-        return int(payload["port"])
+        return int(_read_port_payload(profile)["port"])
     except Exception:                                                           # noqa: BLE001
         return None
+
+
+def read_pid(profile: Path) -> int:
+    """档案里记的浏览器主进程 pid（没有就是 0）。"""
+    try:
+        return int(_read_port_payload(profile).get("pid") or 0)
+    except Exception:                                                           # noqa: BLE001
+        return 0
 
 
 def write_port_file(profile: Path, port: int, pid: int | None = None) -> None:
@@ -217,8 +200,36 @@ def clear_port_file(profile: Path) -> None:
         pass
 
 
-# ---------------- 启动器 ----------------
+def kill_tree(pid: int) -> bool:
+    """按 pid 结束整个进程树（Windows: taskkill /T /F）。返回是否成功。"""
+    if not pid:
+        return False
+    try:
+        if sys.platform == "win32":
+            done = subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                                  capture_output=True, text=True)
+        else:
+            done = subprocess.run(["kill", "-TERM", f"-{pid}"], capture_output=True, text=True)
+        return done.returncode == 0
+    except Exception:                                                           # noqa: BLE001
+        return False
 
+
+def close_running(profile: Path) -> dict:
+    """关掉档案里记的那个浏览器（**哪怕它不是我起起的**）。
+
+    Returns:
+        ``{"port":…, "pid":…, "killed":bool}`` —— 只有事实，调用方照原样报告。
+    """
+    profile = Path(profile)
+    port = read_port_file(profile)
+    pid = read_pid(profile)
+    killed = kill_tree(pid)
+    clear_port_file(profile)
+    return {"port": port, "pid": pid, "killed": killed}
+
+
+# ---------------- 启动器 ----------------
 
 class Launcher:
     """确保"有一个跑着的普通 Chrome 可以用"，返回它的 CDP 地址。"""
@@ -233,7 +244,7 @@ class Launcher:
         """返回 ``http://127.0.0.1:<port>``；能复用已有实例就复用。
 
         Raises:
-            ChromiumError: 找不到浏览器，或连续几次都起不来（常见于 profile 被占用）。
+            ChromiumError: 找不到浏览器，或起不来（**只尝试一次**，不重试 —— 重试只会多开窗口）。
         """
         profile = Path(profile)
         profile.mkdir(parents=True, exist_ok=True)
@@ -249,39 +260,42 @@ class Launcher:
                 "未找到 Chrome/Edge：请安装，或用 BROWSER_PATH 指定浏览器可执行文件"
             )
 
-        last_error = ""
-        for _ in range(_START_ATTEMPTS):
-            port = free_port()
-            args = build_args(self.path, port, profile, headless)
-            try:
-                process = subprocess.Popen(args, stdout=subprocess.DEVNULL,
-                                           stderr=subprocess.DEVNULL,
-                                           creationflags=_CREATE_NO_WINDOW)
-            except OSError as exc:
-                last_error = f"无法启动 {self.path}：{exc}"
-                continue
+        port = free_port()
+        args = build_args(self.path, port, profile, headless)
+        try:
+            process = subprocess.Popen(args, stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL,
+                                       creationflags=_CREATE_NO_WINDOW)
+        except OSError as exc:
+            raise ChromiumError(f"无法启动 {self.path}：{exc}") from exc
 
-            if self._wait_ready(port, process):
-                self.process = process
-                self.port = port
-                self.started = True
-                write_port_file(profile, port, process.pid)
-                return f"http://127.0.0.1:{port}"
+        if self._wait_ready(port, process):
+            self.process = process
+            self.port = port
+            self.started = True
+            write_port_file(profile, port, process.pid)
+            return f"http://127.0.0.1:{port}"
 
-            code = process.poll()
-            self._terminate(process)
-            last_error = (f"Chrome 未在 {_READY_TIMEOUT:.0f}s 内就绪"
-                          f"（退出码 {code}）—— profile 可能已被另一个 Chrome 占用：{profile}"
-                          if code is not None else f"Chrome 未在 {_READY_TIMEOUT:.0f}s 内就绪")
-        raise ChromiumError(last_error or "Chrome 启动失败")
+        code = process.poll()
+        self._terminate(process)
+        raise ChromiumError(
+            f"Chrome 未能就绪（pid={process.pid}, port={port}, 退出码={code}）—— "
+            f"profile 可能已被另一个 Chrome 占用：{profile}"
+        )
 
-    def stop(self, profile: Path | None = None) -> None:
-        """只关我们自己起的实例；接管来的不动。"""
+    def stop(self, profile: Path | None = None, clear: bool = True) -> None:
+        """关掉**本进程起的**实例；接管来的不动。
+
+        Args:
+            profile: 档案所在的 profile 目录。
+            clear: 是否删掉端口档案。**detach（只断开）时必须传 False** ——
+                   删了就等于把"我们在用的那个浏览器"弄丢，下次会去起一个新的（profile 被占用→开一堆窗口）。
+        """
         if self.started and self.process is not None:
             self._terminate(self.process)
             self.process = None
             self.started = False
-        if profile is not None:
+        if profile is not None and clear:
             clear_port_file(Path(profile))
 
     @staticmethod

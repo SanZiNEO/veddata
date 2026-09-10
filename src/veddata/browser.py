@@ -291,13 +291,23 @@ class BrowserSession:
                 pass
             self._playwright = None
 
-        if self._launcher is not None:
-            started = self._launcher.started
-            self._launcher.stop(paths.profile_dir())
-            note = "Browser closed." if started else "Detached (browser left running)."
-            self._launcher = None
-        else:
+        profile = paths.profile_dir()
+        external = bool(os.environ.get("BROWSER_ADDRESS", "").strip())
+        if self._launcher is not None and self._launcher.started:
+            self._launcher.stop(profile)                          # 本进程起的：杀进程 + 删档案
             note = "Browser closed."
+        elif external:
+            if self._launcher is not None:
+                self._launcher.stop(profile, clear=False)         # 外部浏览器：只断开，档案留着
+            note = "Detached (external browser via BROWSER_ADDRESS left running)."
+        else:
+            # 不是本进程起的，但档案是我们写的（例如服务重启后接管回来的）→ 真关掉
+            outcome = chromium.close_running(profile)
+            note = (f"Browser closed (pid={outcome['pid']})." if outcome.get("killed")
+                    else f"Browser closed (nothing running, pid={outcome.get('pid') or '-'}).")
+            if self._launcher is not None:
+                self._launcher.stop(profile, clear=False)
+        self._launcher = None
 
         self._context = None
         self._pages.clear()
