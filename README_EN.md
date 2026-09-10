@@ -157,6 +157,10 @@ the paging parameters (no error). The data itself stays on the server, so you ca
 - **List**: `ved_watch()` shows id / type / target / hits / state
 - **Remove**: `ved_watch(remove="w1,w3")` or `remove="all"`
 - JS watch `line` is **1-based** (same as the line numbers `ved_script_source` prints)
+**Read before watching (JS watches)**: you must read a script with `ved_script_source(url=...)`
+before setting a breakpoint on it — otherwise the watch is refused with a "read it first" remedy.
+If the script has changed since (page reload), re-read it, or you would be setting a breakpoint on a
+stale line. **Request watches do not touch code and have no such requirement.**
 ## Tools (29)
 
 ### Navigate (6)

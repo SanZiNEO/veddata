@@ -4,7 +4,7 @@ import asyncio
 import json as _json
 import time
 
-from veddata import limits, paths, state
+from veddata import limits, paths, state, watch_policy
 from veddata.browser import BrowserSession
 from veddata.network_monitor import NetworkMonitor
 from veddata.export import Exporter
@@ -467,6 +467,25 @@ def _max_hits(raw) -> int:
     return 0 if value == 0 else max(1, value)
 
 
+async def _require_script_read(tab_id: str, url: str, line: int) -> str | None:
+    """先读后打：没读过该脚本就拒绝打 JS 观测点。
+
+    返回面向模型的错误文案；``None`` 表示通过。
+    """
+    registry = state._script_registries.get(tab_id)
+    source = None
+    if registry is not None:
+        try:
+            source = await registry.get_source(url)
+        except Exception:
+            source = None
+    try:
+        watch_policy.check_read(tab_id, url, source)
+    except watch_policy.WatchPolicyError as exc:
+        return watch_policy.remediate(exc, url, line)
+    return None
+
+
 def _format_watch_report(snapshots: list[dict], limit: int = 5) -> str:
     total = len(snapshots)
     shown = snapshots[: limits.clamp(limit, low=1, high=50, default=5)]
@@ -531,6 +550,10 @@ async def ved_watch(
     区别只在命中后自动读值并 resume，不打断页面。但也因此：断点打在热点行会反复中断，
     所以默认只取第一次（要连续观察就调大 max）。
 
+    **先读后打**：JS 观测点要求先读过该脚本（``ved_script_source(url=...)``）。没读过会被
+    拒绝并提示去读；读完之后脚本变了（页面重载/内容不同）也要重读 —— 否则等于拿旧认知
+    在错误的行上设断点。请求观测点不涉及代码，没有这个要求。
+
     Args:
         observations: 观测点列表。
         collect: True = 等待收集并返回报告（保留观测点；清理用 remove）。
@@ -584,6 +607,9 @@ async def ved_watch(
                 line = int(obs.get("line", 0) or 0)
                 if line < 1:
                     return f"JS watch '{watch_id}' needs a 1-based line number (got {line})"
+                refusal = await _require_script_read(tab_id, url, line)
+                if refusal:
+                    return refusal
                 await engine.add_js_watch(url, line, obs.get("variables", []), watch_id, max_hits)
                 registered.append(f"{watch_id}(JS {url}:{line}, max={max_hits or '∞'})")
             else:
@@ -721,6 +747,8 @@ async def ved_script_source(
     context_lines: 匹配行前后显示几行上下文。
     start_line / line_count: 按行翻页（大文件分段读；单行超过 2000 字符会被截断）。
 
+    读到任意窗口即视为"已读该脚本"：之后才允许在它上面打 JS 观测点（ved_watch 的先读后打）。
+
     Args:
         url: 脚本 URL。
         query: 可选搜索字符串。
@@ -741,6 +769,9 @@ async def ved_script_source(
     source = await registry.get_source(url)
     if source is None:
         return f"Source not found: {url}"
+
+    # 先读后打：读到这里就记一笔观测，之后才允许在这个脚本上打 JS 观测点
+    watch_policy.ledger().observe(tab_id, url, source)
 
     lines = source.splitlines()
     total = len(lines)
