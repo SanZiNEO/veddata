@@ -110,6 +110,40 @@ uv pip install -e ".[dev]"
 - **人机协作**：界面可见，登录或验证由用户在窗口中完成；工具照实报告当前页面事实。
 - **浏览器生命周期**：自行启动的浏览器由 `ved_close` 关闭；通过 `BROWSER_ADDRESS` 接管的仅断开连接。
 
+发布到 PyPI 之后，也可以直接运行，不用克隆仓库：
+
+```json
+{
+  "mcpServers": {
+    "veddata": {
+      "command": "uvx",
+      "args": ["veddata", "--response-dir", "E:\\path\\to\\out"]
+    }
+  }
+}
+```
+
+## 示例：没有接口文档的站点，怎么拿到下载直链
+
+以 svgrepo 为例（该站点没有公开接口文档，AI 只能自己侦察）。一条工具链跑完：
+
+```json
+[
+  {"tool": "ved_open"},
+  {"tool": "ved_goto", "args": {"url": "https://www.svgrepo.com/vectors/arrow/"}},
+  {"tool": "ved_goto", "args": {"url": "https://www.svgrepo.com/svg/535197/arrow-u-up-left"}},
+  {"tool": "ved_act",  "args": {"action": "click", "target": "css=a[href*='/download/']"}}
+]
+```
+
+消息里直接给出事实（动作、因果、落盘位置）：
+
+```
+[click] Clicked 'css=a[href*='/download/']' → +1 new APIs
+    GET    https://www.svgrepo.com/_next/data/XJiZPe18H5paekHV…/tools.json
+download: arrow-u-up-left-svgrepo-com.svg → E:\Downloads\arrow-u-up-left-svgrepo-com.svg (completed, 399 B)
+```
+
 ## 开发
 
 ```bash

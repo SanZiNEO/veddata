@@ -1,0 +1,33 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "io.github.SanZiNEO/veddata",
+  "description": "MCP server for web data-source discovery: capture network traffic, extract embedded data, analyse scripts, and track data flow through interaction and watch points.",
+  "version": "0.1.0",
+  "repository": {
+    "url": "https://github.com/SanZiNEO/veddata",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "veddata",
+      "version": "0.1.0",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "HEADLESS",
+          "description": "Set to true to run the browser without a window (headed by default).",
+          "isRequired": false
+        },
+        {
+          "name": "BROWSER_PATH",
+          "description": "Path to the browser executable to use; the value edge selects Microsoft Edge.",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}

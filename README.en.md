@@ -110,6 +110,40 @@ Client configuration (standard input/output):
 - **Human in the loop** — the window is visible; sign-in or verification is completed by the user in the window, and tools report the page facts.
 - **Browser lifecycle** — a browser we launched is closed by `ved_close`; a browser attached through `BROWSER_ADDRESS` is only disconnected.
 
+Once published to PyPI you can run it directly, without cloning the repository:
+
+```json
+{
+  "mcpServers": {
+    "veddata": {
+      "command": "uvx",
+      "args": ["veddata", "--response-dir", "/path/to/out"]
+    }
+  }
+}
+```
+
+## Example: finding a download URL on a site with no API documentation
+
+Taking svgrepo as an example (the site publishes no interface documentation, so the agent has to scout it). One tool chain does the whole job:
+
+```json
+[
+  {"tool": "ved_open"},
+  {"tool": "ved_goto", "args": {"url": "https://www.svgrepo.com/vectors/arrow/"}},
+  {"tool": "ved_goto", "args": {"url": "https://www.svgrepo.com/svg/535197/arrow-u-up-left"}},
+  {"tool": "ved_act",  "args": {"action": "click", "target": "css=a[href*='/download/']"}}
+]
+```
+
+The tool message then states the facts — the action, its causality, and where the file landed:
+
+```
+[click] Clicked 'css=a[href*='/download/']' → +1 new APIs
+    GET    https://www.svgrepo.com/_next/data/XJiZPe18H5paekHV…/tools.json
+download: arrow-u-up-left-svgrepo-com.svg → E:\Downloads\arrow-u-up-left-svgrepo-com.svg (completed, 399 B)
+```
+
 ## Development
 
 ```bash
