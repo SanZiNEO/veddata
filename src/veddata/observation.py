@@ -136,20 +136,21 @@ def require(tool: str) -> None:
 
 
 def remediate(error: Exception) -> str:
-    """把策略失败改写成面向模型的、**带恢复动作**的一句话。"""
+    """把策略拒绝**陈述成事实**（不给建议动作 —— 下一步交给 AI 自己判断）。
+
+    只说三件事：哪个工具没执行、为什么（哪次观测之后变了什么）、账本当前状态。
+    """
     code = getattr(error, "code", "")
     tool = getattr(error, "tool", "this tool")
     if code == STATE_NOT_OBSERVED:
-        return (
-            f"cannot run {tool}: browser state has not been looked at yet — "
-            f"call ved_status() first (it lists tabs, their URLs and any human-check page), then retry"
-        )
+        return (f"{tool}: 未执行 —— 浏览器状态从未被观测过"
+                f"（browser state: epoch={_ledger.epoch}, observed=none；"
+                f"本 epoch 上 ved_status() / ved_tabs() 均未被调用）")
     if code == STATE_STALE:
-        reasons = "; ".join(getattr(error, "reasons", []) or []) or "page/tab changed"
-        return (
-            f"cannot run {tool}: browser state changed outside of tool calls ({reasons}) — "
-            f"call ved_status() to re-check which tabs exist and what page each is on, then retry"
-        )
+        reasons = "; ".join(getattr(error, "reasons", []) or []) or "unknown"
+        return (f"{tool}: 未执行 —— 浏览器状态在上次观测之后发生变化（{reasons}）"
+                f"（browser state: epoch={_ledger.epoch}, observed={_ledger.observed_epoch}；"
+                f"变化之后 ved_status() 未被调用过）")
     return str(error)
 
 

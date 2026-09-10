@@ -338,8 +338,7 @@ def render(run_record: ChainRun) -> str:
         for line in item.diff:
             lines.append(f"          ↳ {line}")            # 因果：这步动作触发了什么
     if run_record.stop_reason:
-        lines.append(f"  stopped: {run_record.stop_reason}")
-        lines.append(f"  续跑：ved_chain(resume=\"{run_record.id}:{run_record.next_step()}\")")
+        lines.append(f"  stopped at step {run_record.stop_index}: {run_record.stop_reason}")
     return limits.truncate_text("\n".join(lines), hint="细节留在服务端：ved_apis / ved_inspect / ved_watch(collect)")
 
 

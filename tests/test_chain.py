@@ -112,7 +112,8 @@ def test_failure_stops_and_offers_resume():
     record = asyncio.run(core.run([{"tool": "ved_open"}, {"tool": "ved_act"}], caller=caller))
     assert not record.done and record.stop_index == 2
     report = core.render(record)
-    assert "stopped:" in report and f'resume="{record.id}:2"' in report
+    assert "stopped at step 2" in report
+    assert "resume" not in report and "续跑" not in report      # 只陈述事实，不给建议动作
 
 
 def test_on_error_continue_keeps_going():
