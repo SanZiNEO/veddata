@@ -19,17 +19,21 @@ class ScriptRegistry:
         self._sources: dict[str, str] = {}     # url → text（缓存）
         self._seeded = False
         self._attached = False
+        self._enabled = False
 
     async def attach(self, cdp) -> None:
-        """Enable Debugger and collect scriptParsed events."""
+        """只挂事件监听，**不开 Debugger**。
+
+        默认不开调试器：DrissionPage / 裸 CDP 客户端都是"用到才 enable"，
+        Playwright 自己也不开。我们以前在每个页面上都 `Debugger.enable` ——
+        等于主动告诉页面"有调试器连着"，站点自检就能看见。
+        真正需要脚本清单/源码时再调 :meth:`enable`（Chrome 会把已加载脚本重新
+        scriptParsed 一遍，所以迟开不会漏）。
+        """
         if self._attached:
             return
         self._attached = True
         self._cdp = cdp
-        try:
-            await cdp.send("Debugger.enable")
-        except Exception:
-            pass
 
         def on_script_parsed(params):
             url = params.get("url", "")
@@ -42,6 +46,16 @@ class ScriptRegistry:
             })
 
         cdp.on("Debugger.scriptParsed", on_script_parsed)
+
+    async def enable(self) -> None:
+        """按需开 Debugger（幂等）。开了之后 Chrome 会重发已加载脚本的 scriptParsed。"""
+        if self._enabled or not self._cdp:
+            return
+        self._enabled = True
+        try:
+            await self._cdp.send("Debugger.enable")
+        except Exception:
+            self._enabled = False
 
     async def seed(self) -> None:
         """补齐 attach 之前已加载的脚本 URL（无 script_id，走网络获取）。"""
@@ -69,7 +83,12 @@ class ScriptRegistry:
             })
 
     async def get_source(self, url: str) -> str | None:
-        """返回脚本源码（缓存）。CDP 拿不到时用 page.request 下载。"""
+        """返回脚本源码（缓存）。CDP 拿不到时用 page.request 下载。
+
+        第一次真要读脚本时才开 Debugger（见 :meth:`enable`）—— 平时不挂着调试器，
+        和 DrissionPage / 裸 CDP 客户端"用到才 enable"一致。
+        """
+        await self.enable()
         if url in self._sources:
             return self._sources[url]
         info = self._scripts.get(url)

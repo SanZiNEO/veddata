@@ -80,7 +80,10 @@ class BrowserSession:
                 self._after_attach()
                 return self._context
 
-        browser = await self._playwright.chromium.connect_over_cdp(address)
+        # no_defaults=True：不要 Playwright 的默认覆盖（focus emulation、
+        # colorScheme/reducedMotion/forcedColors/contrast 媒体模拟、acceptDownloads）。
+        # DrissionPage 走的是裸 CDP，什么都不套 —— 我们对齐它，别给页面留下可观测的差异。
+        browser = await self._playwright.chromium.connect_over_cdp(address, no_defaults=True)
         contexts = browser.contexts
         self._context = contexts[0] if contexts else await browser.new_context()
         self._after_attach()
