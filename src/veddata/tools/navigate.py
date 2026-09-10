@@ -169,6 +169,10 @@ async def ved_goto(url: str, new_tab: bool = False, depth: int = limits.TREE_DEP
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=30000)
     except Exception as e:
+        if "Download is starting" in str(e):
+            # 响应是文件而不是文档：这不是失败，是"下载开始了"——照实说
+            return (f"{state.prefix(tab_id)}\n"
+                    f"download started（响应是文件，不是文档；页面未变）")
         return f"Failed to navigate: {e}"
 
     try:

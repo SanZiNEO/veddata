@@ -120,10 +120,19 @@ def expand(steps: list, _depth: int = 0) -> list[dict]:
     return flat
 
 
+def _brief(value) -> str:
+    """参数摘要：URL 只留路径（否则几条 goto 长得一模一样，报告里分不出是哪一步）。"""
+    text = str(value)
+    if text.startswith(("http://", "https://")):
+        rest = text.split("//", 1)[1]
+        text = "/" + rest.split("/", 1)[1] if "/" in rest else rest
+    return text[:48]
+
+
 def label_of(step: dict) -> str:
     if "tool" in step:
         args = step.get("args") or {}
-        brief = ", ".join(f"{k}={str(v)[:24]}" for k, v in list(args.items())[:2])
+        brief = ", ".join(f"{k}={_brief(v)}" for k, v in list(args.items())[:2])
         round_tag = f" [第{step['_round']}轮]" if step.get("_round") else ""
         return f"{step['tool']}({brief}){round_tag}"
     wait = step.get("wait") or {}
