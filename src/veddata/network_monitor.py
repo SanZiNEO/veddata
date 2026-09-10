@@ -5,7 +5,7 @@ page.on("request"/"response"/"websocket").  Records carry factual fields
 (source / trigger / structure) and NO resourceType category labels.
 
 Records are deduplicated by (path, method, tab_id); repeat hits bump
-`count` and refresh request/response fields — scout_act's new-API diff
+`count` and refresh request/response fields — ved_act's new-API diff
 and count_snapshot()/recurring_since() depend on this.
 """
 
@@ -137,7 +137,10 @@ class NetworkMonitor:
             request_body = request.post_data
 
         try:
-            request_headers = await request.all_headers()
+            raw_headers = await request.all_headers()
+            # HTTP/2 伪头（:authority / :method / :path / :scheme）不能当普通 header 用：
+            # httpx 会直接拒收（Illegal header name），重放请求就废了。
+            request_headers = {k: v for k, v in (raw_headers or {}).items() if not k.startswith(":")}
         except Exception:
             request_headers = {}
 

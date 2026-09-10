@@ -3,14 +3,20 @@
 import asyncio
 import json as _json
 
-from web_scout import state
-from web_scout.browser import BrowserSession
-from web_scout.network_monitor import NetworkMonitor
-from web_scout.dom import snapshot_tree
+from veddata import limits, state
+from veddata.browser import BrowserSession
+from veddata.network_monitor import NetworkMonitor
+from veddata.dom import snapshot_tree
 
 
 @state.mcp.tool()
-async def scout_scan(mode: str = "all", keyword: str | None = None, url: str | None = None) -> str:
+async def ved_scan(
+    mode: str = "all",
+    keyword: str | None = None,
+    url: str | None = None,
+    offset: int = 0,
+    limit: int = limits.LIST_LIMIT,
+) -> str:
     """Comprehensive page data source scanner.
 
     MODE "all" — full page scan (default):
@@ -25,14 +31,17 @@ async def scout_scan(mode: str = "all", keyword: str | None = None, url: str | N
         mode: "all" for full scan, "dom" for keyword-targeted DOM scan.
         keyword: For mode "dom" — search keyword.
         url: For mode "dom" — optional URL to open before scanning.
+        offset: For mode "dom" — 从第几处匹配开始（默认 0）。
+        limit: For mode "dom" — 本次返回条数（默认 30）。
 
     Returns:
-        Data source summary for mode "all", or match list for mode "dom".
+        Data source summary for mode "all", or match list for mode "dom"。
+        各段都有上限，完整清单用 ved_apis / ved_dom_tree 取。
     """
     if mode == "dom" and url:
-        return await _scan_dom_with_url(url, keyword or "")
+        return await _scan_dom_with_url(url, keyword or "", offset, limit)
     elif mode == "dom":
-        return await _scan_dom_keyword(keyword or "")
+        return await _scan_dom_keyword(keyword or "", offset, limit)
     else:
         return await _scan_all()
 
@@ -96,11 +105,12 @@ async def _scan_all() -> str:
     if len(embedded) > 8:
         parts.append(f"  ... and {len(embedded) - 8} more")
     parts.append("")
+    parts.append("(以上各段都有上限；完整清单：ved_apis / ved_dom_tree，导出用 ved_export)")
     parts.append("---")
-    return "\n".join(parts)
+    return limits.truncate_text("\n".join(parts))
 
 
-async def _scan_dom_keyword(keyword: str) -> str:
+async def _scan_dom_keyword(keyword: str, offset: int = 0, limit: int = limits.LIST_LIMIT) -> str:
     if not state._browser:
         return "Error: no browser session."
     if not keyword.strip():
@@ -121,16 +131,16 @@ async def _scan_dom_keyword(keyword: str) -> str:
     matches = tree.search(keyword)
     if not matches:
         return f"{state.current_prefix()}\nNo elements found for '{keyword}'."
+    page, footer = limits.paginate(matches, offset, limit, unit="处匹配")
     lines = [state.current_prefix(), f"DOM matches for '{keyword}':", ""]
-    for path, node in matches[:30]:
+    for path, node in page:
         summary = node.text[:60] if node.text else ""
         lines.append(f"  {path}" + (f'  "{summary}"' if summary else ""))
-    if len(matches) > 30:
-        lines.append(f"  ... and {len(matches) - 30} more")
-    return "\n".join(lines)
+    lines.append(footer)
+    return limits.truncate_text("\n".join(lines))
 
 
-async def _scan_dom_with_url(url: str, keyword: str) -> str:
+async def _scan_dom_with_url(url: str, keyword: str, offset: int = 0, limit: int = limits.LIST_LIMIT) -> str:
     if not state._browser:
         state._browser = BrowserSession()
     pool = state.get_pool()
@@ -150,12 +160,12 @@ async def _scan_dom_with_url(url: str, keyword: str) -> str:
         matches = tree.search(keyword)
         if not matches:
             return f"{state.current_prefix()}\nNo elements found for '{keyword}'."
+        page, footer = limits.paginate(matches, offset, limit, unit="处匹配")
         lines = [state.current_prefix(), f"DOM matches for '{keyword}':", ""]
-        for path, node in matches[:30]:
+        for path, node in page:
             summary = node.text[:60] if node.text else ""
             lines.append(f"  {path}" + (f'  "{summary}"' if summary else ""))
-        if len(matches) > 30:
-            lines.append(f"  ... and {len(matches) - 30} more")
-        return "\n".join(lines)
+        lines.append(footer)
+        return limits.truncate_text("\n".join(lines))
     except Exception as e:
-        return f"scout_scan failed: {e}"
+        return f"ved_scan failed: {e}"

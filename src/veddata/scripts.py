@@ -8,6 +8,8 @@ or, as fallback, page.request.get(url).
 
 import re
 
+from veddata import limits
+
 
 class ScriptRegistry:
     def __init__(self, page, cdp=None):
@@ -126,7 +128,12 @@ class ScriptRegistry:
             source = self._sources.get(url)
             size = len(source) if source is not None else info.get("length", 0)
             line_count = source.count("\n") + 1 if source is not None else 0
-            lines.append(f"{url} ({size} bytes, {line_count} lines)")
+            label = limits.describe_inline(url)   # data: URI 只给摘要，绝不吐内容
+            if label != url:
+                # 内联脚本：只给摘要，不再重复后面的字节/行数（两者口径不同，容易误导）
+                lines.append(label)
+            else:
+                lines.append(f"{label} ({size} bytes, {line_count} lines)")
         if not lines:
             return "(no scripts)"
         return "\n".join(sorted(lines))

@@ -4,12 +4,12 @@ import asyncio
 import json as _json
 import time
 
-from web_scout import state
-from web_scout.browser import BrowserSession
-from web_scout.network_monitor import NetworkMonitor
-from web_scout.export import Exporter
-from web_scout.requester import exec_request
-from web_scout.watch_engine import WatchEngine
+from veddata import limits, paths, state
+from veddata.browser import BrowserSession
+from veddata.network_monitor import NetworkMonitor
+from veddata.export import Exporter
+from veddata.requester import exec_request
+from veddata.watch_engine import WatchEngine
 
 
 def _parse_indices(index: int, indices: str) -> list[int]:
@@ -21,15 +21,22 @@ def _parse_indices(index: int, indices: str) -> list[int]:
 
 
 @state.mcp.tool()
-def scout_apis(keyword: str | None = None, tab: str = "") -> str:
+def ved_apis(
+    keyword: str | None = None,
+    tab: str = "",
+    offset: int = 0,
+    limit: int = limits.LIST_LIMIT,
+) -> str:
     """列出已捕获的所有数据。包括网络请求、DOM 内嵌数据、JS 变量等。每条记录标注触发时机，不贴类型标签。
 
     Args:
-        keyword: Optional filter on path or response body.
-        tab: CDP short ID (empty = current active tab).
+        keyword: 按 path 或响应体过滤（可选）。
+        tab: CDP short ID（空 = 当前激活 tab）。
+        offset: 从第几条开始（默认 0）。
+        limit: 本次返回条数（默认 30）。
 
     Returns:
-        Numbered list of captured data records.
+        分页清单；页脚给出续读用的 offset。记录都留在服务端，随时可以再取。
     """
     if not state._browser:
         return "Error: no browser session."
@@ -39,16 +46,19 @@ def scout_apis(keyword: str | None = None, tab: str = "") -> str:
     pool = state.get_pool()
     if not pool:
         return "No data captured yet."
-    result = pool.list_apis(keyword=keyword, tab_id=tab_id)
-    return f"{state.prefix(tab_id)}\n{result}"
+    rows = [ln for ln in pool.list_apis(keyword=keyword, tab_id=tab_id).splitlines() if ln.strip()]
+    if not rows:
+        return f"{state.prefix(tab_id)}\nNo APIs captured yet."
+    page, footer = limits.paginate(rows, offset, limit, unit="条")
+    return f"{state.prefix(tab_id)}\n" + "\n".join(page) + f"\n{footer}"
 
 
 @state.mcp.tool()
-def scout_inspect(index: int = 0, detail: str = "preview", tab: str = "", indices: str = "") -> str:
+def ved_inspect(index: int = 0, detail: str = "preview", tab: str = "", indices: str = "") -> str:
     """Show full request and response details for one or more APIs.
 
     Args:
-        index: API ID (from scout_apis output). Use 0 when using indices.
+        index: API ID (from ved_apis output). Use 0 when using indices.
         detail: "preview" or "full".
         tab: CDP short ID (empty = current active tab).
         indices: Comma-separated API IDs (e.g. "2,4"). Overrides index.
@@ -76,12 +86,12 @@ def scout_inspect(index: int = 0, detail: str = "preview", tab: str = "", indice
             parts.append(f"\n--- API #{n} ---")
         parts.append(pool.inspect(n, detail=detail, tab_id=tab_id))
     if not ids:
-        parts.append("Provide index (from scout_apis) or indices.")
+        parts.append("Provide index (from ved_apis) or indices.")
     return "\n".join(parts)
 
 
 @state.mcp.tool()
-async def scout_search(keyword: str, tab: str = "") -> str:
+async def ved_search(keyword: str, tab: str = "") -> str:
     """在已捕获的所有数据中搜索关键词。包括网络请求、DOM 内嵌 JSON、页面渲染文本和 JS 全局变量。
 
     Supports comma-separated keywords for OR search.
@@ -152,7 +162,7 @@ async def scout_search(keyword: str, tab: str = "") -> str:
 
 
 @state.mcp.tool()
-async def scout_context(keyword: str, tab: str = "") -> str:
+async def ved_context(keyword: str, tab: str = "") -> str:
     """Search all data sources for keyword, returning field paths and values.
 
     Args:
@@ -214,18 +224,21 @@ async def scout_context(keyword: str, tab: str = "") -> str:
 
 
 @state.mcp.tool()
-def scout_export(index: int = 0, format: str = "both", tab: str = "", indices: str = "", output_dir: str | None = None) -> str:
-    """Export one or more captured API data sources.
+def ved_export(index: int = 0, format: str = "both", tab: str = "", indices: str = "", output_dir: str | None = None) -> str:
+    """导出捕获到的 API 数据源（一个或多个）。
 
     Args:
-        index: API ID (from scout_apis output). Use 0 when using indices.
-        format: "raw" | "compact" | "both" (default "both").
-        tab: CDP short ID (empty = current active tab).
-        indices: Comma-separated API IDs (e.g. "2,4"). Overrides index.
-        output_dir: Override save directory.
+        index: API ID（来自 ved_apis 输出）。用 indices 时传 0。
+        format: "raw" | "compact" | "both"（默认 both）。compact 只返回字段文档，不写盘。
+        tab: CDP short ID（空 = 当前激活 tab）。
+        indices: 逗号分隔的 API ID（如 "2,4"），优先于 index。
+        output_dir: 本次落盘目录（**绝对路径**），覆盖启动参数 --response-dir。
 
     Returns:
-        Export result with saved file path and/or field document.
+        导出结果，含已保存文件的绝对路径和/或字段文档。
+
+    文件名：``<站点名>_<接口名>_<YYYYMMDD-HHMMSS>.json``。
+    format 含 raw 时需要能解析出落盘目录（output_dir 或 --response-dir），否则报错。
     """
     if not state._browser:
         return "Error: no browser session."
@@ -237,7 +250,12 @@ def scout_export(index: int = 0, format: str = "both", tab: str = "", indices: s
         return "No data to export."
 
     ids = _parse_indices(index, indices)
-    exporter = state.get_exporter(output_dir)
+    exporter = state.get_exporter()
+    if format in ("raw", "both"):
+        try:
+            exporter.resolve_dir(output_dir)
+        except paths.PathError as exc:
+            return str(exc)
     parts = [state.prefix(tab_id)]
     exported = 0
     for n in ids:
@@ -255,16 +273,19 @@ def scout_export(index: int = 0, format: str = "both", tab: str = "", indices: s
 
 
 @state.mcp.tool()
-def scout_export_all(format: str = "both", tab: str = "", output_dir: str | None = None) -> str:
-    """Export all captured API data sources at once.
+def ved_export_all(format: str = "both", tab: str = "", output_dir: str | None = None) -> str:
+    """一次导出当前 tab 捕获到的所有 API 数据源。
 
     Args:
-        format: "raw" | "compact" | "both" (default "both").
-        tab: CDP short ID (empty = current active tab).
-        output_dir: Override save directory.
+        format: "raw" | "compact" | "both"（默认 both）。compact 只返回字段文档，不写盘。
+        tab: CDP short ID（空 = 当前激活 tab）。
+        output_dir: 本次落盘目录（**绝对路径**），覆盖启动参数 --response-dir。
 
     Returns:
-        Summary of exported APIs.
+        导出摘要（含落盘目录）。
+
+    文件名：``<站点名>_<接口名>_<YYYYMMDD-HHMMSS>.json``。
+    format 含 raw 时需要能解析出落盘目录（output_dir 或 --response-dir），否则报错。
     """
     if not state._browser:
         return "Error: no browser session."
@@ -275,10 +296,17 @@ def scout_export_all(format: str = "both", tab: str = "", output_dir: str | None
     if not pool:
         return "No data to export."
 
-    exporter = state.get_exporter(output_dir)
+    exporter = state.get_exporter()
     records = pool.get_by_tab(tab_id)
     if not records:
         return f"{state.prefix(tab_id)}\nNo APIs captured yet."
+
+    save_dir = None
+    if format in ("raw", "both"):
+        try:
+            save_dir = exporter.resolve_dir(output_dir)
+        except paths.PathError as exc:
+            return str(exc)
 
     results = []
     for record in records:
@@ -288,19 +316,19 @@ def scout_export_all(format: str = "both", tab: str = "", output_dir: str | None
         except Exception as e:
             results.append(f"  [{record['id']}] {record['method']} {record['path']}  -> FAILED: {e}")
 
-    save_dir = output_dir or exporter.response_dir
     lines = [
         state.prefix(tab_id),
         f"Batch export complete: {len(results)} APIs.",
-        f"Output directory: {save_dir}/",
-        "",
     ]
+    if save_dir:
+        lines.append(f"Output directory: {save_dir}")
+    lines.append("")
     lines.extend(results)
     return "\n".join(lines)
 
 
 @state.mcp.tool()
-async def scout_peek(url: str, path_contains: str | None = None, method: str | None = None) -> str:
+async def ved_peek(url: str, path_contains: str | None = None, method: str | None = None) -> str:
     """快速探测指定 URL 的数据源。打开页面 → 自动捕获 API → 返回字段文档。
 
     Args:
@@ -350,11 +378,11 @@ async def scout_peek(url: str, path_contains: str | None = None, method: str | N
         return f"{state.prefix(tab_id)}\n=== Matched API #{target['id']} ===\n{inspect_text}\n\n=== Field Document ===\n{compact_text}"
 
     except Exception as e:
-        return f"scout_peek failed: {e}"
+        return f"ved_peek failed: {e}"
 
 
 @state.mcp.tool()
-async def scout_request(
+async def ved_request(
     index: int = 0,
     url: str = "",
     method: str = "GET",
@@ -430,40 +458,52 @@ async def _get_watch_engine(tab_id: str):
     return engine
 
 
-def _format_watch_report(snapshots: list[dict]) -> str:
-    lines = [f"Watch snapshots ({len(snapshots)}):", ""]
-    for s in snapshots:
+def _format_watch_report(snapshots: list[dict], limit: int = 5) -> str:
+    total = len(snapshots)
+    shown = snapshots[: limits.clamp(limit, low=1, high=50, default=5)]
+    lines = [f"Watch snapshots ({total}):", ""]
+    for s in shown:
         lines.append(f"--- Watch {s['watch_id']} ---")
         lines.append(f"type: {s['type']}")
         if s["type"] == "request":
-            lines.append(f"url: {s['url']}")
+            lines.append(f"url: {limits.clip(s['url'], limits.URL_CHARS)}")
             lines.append(f"method: {s['method']}")
-            lines.append(f"headers: {_json.dumps(s['headers'], ensure_ascii=False)[:400]}")
+            lines.append(
+                f"headers: {limits.clip(_json.dumps(s['headers'], ensure_ascii=False), limits.HEADER_CHARS)}"
+            )
         else:
-            lines.append(f"url: {s['url']}")
+            lines.append(f"url: {limits.clip(s['url'], limits.URL_CHARS)}")
             lines.append(f"line: {s['line']}")
             if s.get("source"):
-                lines.append(f"source: {s['source']}")
-            lines.append(f"variables: {_json.dumps(s.get('variables', {}), ensure_ascii=False)}")
+                lines.append(f"source: {limits.clip(s['source'], 200)}")
+            lines.append(
+                f"variables: {limits.clip(_json.dumps(s.get('variables', {}), ensure_ascii=False), 400)}"
+            )
             for frame in s.get("call_stack", [])[:3]:
-                lines.append(f"  at {frame}")
+                lines.append(f"  at {limits.clip(frame, 200)}")
         lines.append("")
-    return "\n".join(lines)
+    if total > len(shown):
+        lines.append(f"…(显示 {len(shown)} / 共 {total} 条快照。用 limit={total} 看全部)")
+    return limits.truncate_text(
+        "\n".join(lines),
+        hint="快照里只留了摘要；对应请求的完整请求/响应体用 ved_inspect 看（记录都在服务端）",
+    )
 
 
 @state.mcp.tool()
-async def scout_watch(
+async def ved_watch(
     observations: list | None = None,
     collect: bool = False,
     timeout: float = 15.0,
     tab: str = "",
+    limit: int = 5,
 ) -> str:
     """注册多个观测点（请求+JS），触发后一次返回快照。
 
     Two-step flow:
-      1. scout_watch(observations=[{...}, ...]) — 注册，返回观测点清单。
-      2. scout_act(...) — 执行操作触发观测点（自动记录并继续执行）。
-      3. scout_watch(collect=True) — 等所有观测点收齐（或超时），返回报告并清理。
+      1. ved_watch(observations=[{...}, ...]) — 注册，返回观测点清单。
+      2. ved_act(...) — 执行操作触发观测点（自动记录并继续执行）。
+      3. ved_watch(collect=True) — 等所有观测点收齐（或超时），返回报告并清理。
 
     observation 项：
       {"type": "request", "pattern": "/api/*"}          — 匹配 URL 的请求（glob 或 /regex/）
@@ -475,9 +515,10 @@ async def scout_watch(
         collect: True = 等待并收集快照，然后清理观测点。
         timeout: 收集超时秒数（默认 15）。
         tab: CDP short ID（空 = 当前激活 tab）。
+        limit: 报告里最多显示几条快照（默认 5）。
 
     Returns:
-        注册清单或观测报告。
+        注册清单或观测报告（快照里的 URL/headers 有截断，完整请求用 ved_inspect 看）。
     """
     if not state._browser:
         return "Error: no browser session."
@@ -511,7 +552,7 @@ async def scout_watch(
         if engine is None:
             return "No watches registered."
         snapshots = await engine.wait_for_snapshots(timeout=timeout)
-        report = _format_watch_report(snapshots)
+        report = _format_watch_report(snapshots, limit)
         await engine.clear()
         return report
 
@@ -522,16 +563,23 @@ async def scout_watch(
 
 
 @state.mcp.tool()
-async def scout_list_scripts(tab: str = "") -> str:
+async def ved_list_scripts(
+    tab: str = "",
+    offset: int = 0,
+    limit: int = limits.LIST_LIMIT,
+) -> str:
     """列出页面所有 JS 脚本的 URL、大小和行数。
 
-    用于定位目标脚本后传给 scout_script_source。
+    用于定位目标脚本后传给 ved_script_source。内联的 ``data:`` 脚本**只给摘要** ——
+    页面里常有几百 KB 的 wasm/base64，整段吐出来会一次性烧掉大量上下文。
 
     Args:
         tab: CDP short ID（空 = 当前激活 tab）。
+        offset: 从第几个脚本开始（默认 0）。
+        limit: 本次返回个数（默认 30）。
 
     Returns:
-        脚本清单。
+        分页的脚本清单；页脚给出续读用的 offset。
     """
     if not state._browser:
         return "Error: no browser session."
@@ -541,7 +589,7 @@ async def scout_list_scripts(tab: str = "") -> str:
         page = await state._browser.get_page_by_id(tab_id)
         if page is None:
             return "Error: no page available."
-        from web_scout.scripts import ScriptRegistry
+        from veddata.scripts import ScriptRegistry
         cdp = await page.context.new_cdp_session(page)
         registry = ScriptRegistry(page, cdp)
         await registry.attach(cdp)
@@ -549,22 +597,33 @@ async def scout_list_scripts(tab: str = "") -> str:
     await registry.seed()
     for url in list(registry._scripts):
         await registry.get_source(url)
-    return f"{state.prefix(tab_id)}\n{registry.list_scripts()}"
+    rows = [ln for ln in registry.list_scripts().splitlines() if ln.strip()]
+    if not rows:
+        return f"{state.prefix(tab_id)}\n(no scripts)"
+    page, footer = limits.paginate(rows, offset, limit, unit="个脚本")
+    return f"{state.prefix(tab_id)}\n" + "\n".join(page) + f"\n{footer}"
 
 
 @state.mcp.tool()
-async def scout_search_scripts(query: str, tab: str = "") -> str:
+async def ved_search_scripts(
+    query: str,
+    tab: str = "",
+    limit: int = 5,
+    per_file: int = 5,
+) -> str:
     """全局搜索：在所有已加载的 JS 源码中搜索字符串。
 
-    结果按文件分组，显示每个文件的匹配行数。
+    结果按文件分组，显示每个文件的匹配行数（有上限，见 limit / per_file）。
     支持正则（query 以 / 开头和结尾时）。
 
     Args:
         query: 搜索字符串，或 /regex/ 形式。
         tab: CDP short ID（空 = 当前激活 tab）。
+        limit: 最多显示几个文件（默认 5）。
+        per_file: 每个文件最多显示几行（默认 5）。
 
     Returns:
-        按文件分组的匹配行。
+        按文件分组的匹配行；页脚说明如何看到更多。
     """
     if not state._browser:
         return "Error: no browser session."
@@ -581,18 +640,34 @@ async def scout_search_scripts(query: str, tab: str = "") -> str:
     groups = registry.search(pattern, regex=regex)
     if not groups:
         return f"{state.prefix(tab_id)}\nNo matches for '{query}'."
+    file_cap = limits.clamp(limit, low=1, high=50, default=5)
+    line_cap = limits.clamp(per_file, low=1, high=50, default=5)
+    shown = groups[:file_cap]
+
     lines = [state.prefix(tab_id), f"Script matches for '{query}':", ""]
-    for group in groups:
-        lines.append(f"{group['url']} ── {len(group['matches'])} matches")
-        for m in group["matches"][:10]:
-            lines.append(f"  行 {m['line']}: {m['text'][:150]}")
-        if len(group["matches"]) > 10:
-            lines.append(f"  ... and {len(group['matches']) - 10} more")
-    return "\n".join(lines)
+    for group in shown:
+        matches = group["matches"]
+        lines.append(f"{group['url']} ── {len(matches)} matches")
+        for m in matches[:line_cap]:
+            lines.append(f"  行 {m['line']}: {limits.clip_line(m['text'], 200)}")
+        if len(matches) > line_cap:
+            lines.append(
+                f"  …(本文件显示 {line_cap} / 共 {len(matches)} 处；"
+                f"用 ved_script_source(query='{query}') 看上下文)"
+            )
+    lines.append("")
+    if len(shown) < len(groups):
+        lines.append(
+            f"(显示 1-{len(shown)} / 共 {len(groups)} 个文件。用 limit={len(groups)} 看全部；"
+            f"per_file= 调每个文件的行数)"
+        )
+    else:
+        lines.append(f"(共 {len(groups)} 个文件，已全部显示；per_file= 调每个文件的行数)")
+    return limits.truncate_text("\n".join(lines))
 
 
 @state.mcp.tool()
-async def scout_script_source(
+async def ved_script_source(
     url: str,
     query: str = "",
     context_lines: int = 3,
@@ -602,10 +677,10 @@ async def scout_script_source(
 ) -> str:
     """局部查看：查看某个脚本源码，支持搜索高亮和上下文。
 
-    url: 脚本 URL（从 scout_list_scripts 或 scout_search_scripts 获取）。
-    query: 搜索字符串，匹配行会高亮（>>> 前缀）。
+    url: 脚本 URL（从 ved_list_scripts 或 ved_search_scripts 获取）。
+    query: 搜索字符串，匹配行会高亮（>>> 前缀）——压缩成一行的 bundle 用这个，别翻页。
     context_lines: 匹配行前后显示几行上下文。
-    start_line / line_count: 翻页查看（大文件分段读）。
+    start_line / line_count: 按行翻页（大文件分段读；单行超过 2000 字符会被截断）。
 
     Args:
         url: 脚本 URL。
@@ -642,7 +717,8 @@ async def scout_script_source(
             return f"No matches for '{query}' in {url}."
         out = []
         shown = set()
-        for i in hit_lines[:10]:
+        cap = 10
+        for i in hit_lines[:cap]:
             lo = max(0, i - context_lines)
             hi = min(total, i + context_lines + 1)
             for j in range(lo, hi):
@@ -650,21 +726,36 @@ async def scout_script_source(
                     continue
                 shown.add(j)
                 marker = ">>>" if j == i else "   "
-                out.append(f"{marker} {j + 1:5d} | {lines[j][:200]}")
-        return f"{state.prefix(tab_id)}\n{url} ({len(hit_lines)} matches)\n" + "\n".join(out)
+                out.append(f"{marker} {j + 1:5d} | {limits.clip_line(lines[j], 200)}")
+        tail = ""
+        if len(hit_lines) > cap:
+            tail = (
+                f"\n…(显示前 {cap} / 共 {len(hit_lines)} 处命中。"
+                f"用更精确的 query，或按 start_line 翻页看全文)"
+            )
+        body = f"{state.prefix(tab_id)}\n{url} ({len(hit_lines)} matches)\n" + "\n".join(out) + tail
+        return limits.truncate_text(body, hint="单行过长会截断；定位内容用 query= 搜索")
 
-    if start_line >= total:
-        return f"{state.prefix(tab_id)}\n{url}: start_line {start_line} beyond {total} lines."
-    out = []
-    more = "" if start_line + line_count >= total else "\n... (truncated)"
-    return f"{state.prefix(tab_id)}\n{url}\n" + "\n".join(out) + more
+    start = max(0, int(start_line or 0))
+    if start >= total:
+        return f"{state.prefix(tab_id)}\n{url}: start_line {start} beyond {total} lines."
+    count = limits.clamp(line_count, low=1, high=2000, default=50)
+    window = lines[start:start + count]
+    out = [f"{start + i + 1:5d} | {limits.clip_line(line)}" for i, line in enumerate(window)]
+    shown_to = start + len(window)
+    if shown_to < total:
+        tail = f"\n…(显示 {start + 1}-{shown_to} / 共 {total} 行。用 start_line={shown_to} 继续)"
+    else:
+        tail = f"\n(共 {total} 行，已到末尾)"
+    body = f"{state.prefix(tab_id)}\n{url} ({total} lines)\n" + "\n".join(out) + tail
+    return limits.truncate_text(body, hint="单行过长会截断；定位内容用 query= 搜索")
 
 
 # ---- Phase 5: 值追踪 ----
 
 
 @state.mcp.tool()
-async def scout_trace_value(value: str, tab: str = "") -> str:
+async def ved_trace_value(value: str, tab: str = "") -> str:
     """全局搜索一个值出现在哪些地方。
 
     搜索范围: JS 源码 → 网络请求 → DOM 内嵌 → 渲染文本 → JS 变量 → WS。

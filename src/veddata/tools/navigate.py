@@ -2,18 +2,18 @@
 
 import asyncio
 
-from web_scout import state
-from web_scout.browser import BrowserSession
-from web_scout.network_monitor import NetworkMonitor
-from web_scout.dom import snapshot_tree
+from veddata import limits, state
+from veddata.browser import BrowserSession
+from veddata.network_monitor import NetworkMonitor
+from veddata.dom import snapshot_tree
 
 
 @state.mcp.tool()
-async def scout_open() -> str:
+async def ved_open() -> str:
     """启动数据发现会话。打开浏览器以开始捕获页面数据源。浏览网页是前置步骤，不是终点。
 
     Launches a Playwright Chromium session (persistent context) and clears
-    old state.  Does NOT navigate — use scout_goto() for that.
+    old state.  Does NOT navigate — use ved_goto() for that.
 
     Returns:
         Browser session status.
@@ -126,8 +126,8 @@ def _format_actions(tree) -> list[str]:
 
 
 @state.mcp.tool()
-async def scout_goto(url: str, new_tab: bool = False) -> str:
-    """导航到目标页面，自动发现所有数据来源。返回 DOM 结构、网络请求、内嵌数据的完整清单。
+async def ved_goto(url: str, new_tab: bool = False, depth: int = limits.TREE_DEPTH, limit: int = 10) -> str:
+    """导航到目标页面，自动发现所有数据来源。返回 DOM 结构、网络请求、内嵌数据清单。
 
     Starts network monitoring BEFORE navigating (event-driven attach happens
     at tab registration, which precedes goto).
@@ -137,9 +137,11 @@ async def scout_goto(url: str, new_tab: bool = False) -> str:
     Args:
         url: Target URL to navigate to.
         new_tab: True = create new tab; False = navigate current tab.
+        depth: DOM 树深度（默认 2，够看清结构；要细看传 4-8）。
+        limit: 捕获清单预览条数（默认 10；完整清单用 ved_apis 分页取）。
 
     Returns:
-        DOM tree + captured data list + actions.
+        DOM tree（按 depth 限深）+ captured data preview + actions。完整数据留在服务端，随时再取。
     """
     if not state._browser:
         return "Error: no browser session."
@@ -188,31 +190,45 @@ async def scout_goto(url: str, new_tab: bool = False) -> str:
     state._dom_trees[tab_id] = tree
 
     records = pool.get_by_tab(tab_id)
+    tree_depth = limits.clamp(depth, low=1, high=8, default=limits.TREE_DEPTH)
+    preview = limits.clamp(limit, low=1, high=100, default=10)
+
     parts = [
         state.prefix(tab_id),
         f"Title: {title}",
         "",
-        "=== DOM Tree ===",
-        tree.format(4),
+        f"=== DOM Tree (depth={tree_depth}) ===",
+        tree.format(tree_depth),
         "",
         f"=== Captured Data ({len(records)} items) ===",
     ]
-    for rec in records[:12]:
+    for rec in records[:preview]:
         parts.extend(_format_data_line(rec))
-    if len(records) > 12:
-        parts.append(f"... and {len(records) - 12} more")
+    if len(records) > preview:
+        parts.append(
+            limits.page_footer(
+                shown_from=1, shown_to=preview, total=len(records),
+                param="offset", next_value=preview, unit="条",
+            )
+            + "  完整清单：ved_apis"
+        )
     parts.append("")
     parts.append("=== Actions ===")
     actions = _format_actions(tree)
     if actions:
-        parts.extend(actions)
+        parts.extend(actions[:12])
+        if len(actions) > 12:
+            parts.append(f"…(显示 12 / 共 {len(actions)} 个可交互元素)")
     else:
         parts.append("(no interactive elements found)")
-    return "\n".join(parts)
+    return limits.truncate_text(
+        "\n".join(parts),
+        hint="想更深/更多：depth= 调树深度、limit= 调清单条数；逐项细看用 ved_dom_tree / ved_apis / ved_scan",
+    )
 
 
 @state.mcp.tool()
-async def scout_close() -> str:
+async def ved_close() -> str:
     """Close the browser and clear all captured data.
 
     Closes the Playwright context and resets all state.
@@ -235,7 +251,7 @@ async def scout_close() -> str:
 
 
 @state.mcp.tool()
-async def scout_tabs() -> str:
+async def ved_tabs() -> str:
     """List all open browser tabs with CDP short IDs.
 
     Returns:
@@ -247,13 +263,13 @@ async def scout_tabs() -> str:
 
 
 @state.mcp.tool()
-async def scout_tab_switch(tab: str) -> str:
-    """Switch the active tab by CDP short ID (from scout_tabs output).
+async def ved_tab_switch(tab: str) -> str:
+    """Switch the active tab by CDP short ID (from ved_tabs output).
 
-    After switching, scout_goto() targets the new tab.
+    After switching, ved_goto() targets the new tab.
 
     Args:
-        tab: CDP short ID (first 8 chars, from scout_tabs output).
+        tab: CDP short ID (first 8 chars, from ved_tabs output).
 
     Returns:
         Status with the new tab's URL.
@@ -269,7 +285,7 @@ async def scout_tab_switch(tab: str) -> str:
 
 
 @state.mcp.tool()
-async def scout_tab_close(tab: str = "") -> str:
+async def ved_tab_close(tab: str = "") -> str:
     """Close browser tab(s) by CDP short ID and prune their API records.
 
     Supports comma-separated IDs for batch close (e.g. "C724404D,5FD84E84").

@@ -1,10 +1,10 @@
-"""Shared state and helper functions for Web Scout tools."""
+"""Shared state and helper functions for veddata tools."""
 
-from web_scout.browser import BrowserSession
-from web_scout.network_monitor import NetworkMonitor
-from web_scout.dom import DOMTree
-from web_scout.scripts import ScriptRegistry
-from web_scout.export import Exporter
+from veddata.browser import BrowserSession
+from veddata.network_monitor import NetworkMonitor
+from veddata.dom import DOMTree
+from veddata.scripts import ScriptRegistry
+from veddata.export import Exporter
 
 _browser: BrowserSession | None = None
 _api_pool: NetworkMonitor | None = None
@@ -12,7 +12,6 @@ _dom_trees: dict[str, DOMTree] = {}
 _script_registries: dict[str, ScriptRegistry] = {}
 _watches: dict[str, object] = {}          # tab_id → WatchEngine（按需创建）
 _exporter: Exporter | None = None
-_response_dir: str | None = None
 
 from fastmcp import FastMCP
 mcp: FastMCP = None
@@ -69,10 +68,9 @@ def current_prefix() -> str:
     return f"[{short}] {url}"
 
 
-def get_exporter(output_dir: str | None = None) -> Exporter:
+def get_exporter() -> Exporter:
+    """共享的导出器；实际落盘目录每次调用时决定（见 Exporter.resolve_dir）。"""
     global _exporter
-    if output_dir:
-        return Exporter(response_dir=output_dir)
     if not _exporter:
-        _exporter = Exporter(response_dir=_response_dir or "./response")
+        _exporter = Exporter()
     return _exporter

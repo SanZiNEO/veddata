@@ -2,8 +2,8 @@
 
 import asyncio
 
-from web_scout import state
-from web_scout.login import LoginDetector
+from veddata import state
+from veddata.login import LoginDetector
 
 
 async def _find_locator(page, text, kinds):
@@ -118,7 +118,7 @@ async def _do_action(page, pool, step):
 
 
 @state.mcp.tool()
-async def scout_act(
+async def ved_act(
     action: str = "",
     value: str | None = None,
     target: str | None = None,
@@ -127,12 +127,12 @@ async def scout_act(
     """Execute actions on the page: input, scroll, click, or select.
 
     Two modes:
-    1. Single step: scout_act("scroll", "bottom")
-       scout_act("input", "python教程", target="搜索")
-       scout_act("click", target="下一页")
-       scout_act("select", "最多播放", target="综合排序")
+    1. Single step: ved_act("scroll", "bottom")
+       ved_act("input", "python教程", target="搜索")
+       ved_act("click", target="下一页")
+       ved_act("select", "最多播放", target="综合排序")
 
-    2. Chain: scout_act(actions=[
+    2. Chain: ved_act(actions=[
          {"action": "input", "value": "python教程", "target": "搜索"},
          {"action": "scroll", "value": "bottom"},
          {"action": "click", "target": "最多播放"},
@@ -175,7 +175,7 @@ async def scout_act(
 
 
 @state.mcp.tool()
-async def scout_login(timeout: int = 300) -> str:
+async def ved_login(timeout: int = 300) -> str:
     """Wait for the user to manually log in via the browser window.
 
     Detects login by polling cookies: if cookie names change or ≥2 values

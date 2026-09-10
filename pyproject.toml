@@ -3,7 +3,7 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "web-scout"
+name = "veddata"
 version = "1.0.0"
 description = "MCP server for web API & DOM discovery"
 readme = "README.md"
@@ -34,12 +34,12 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/SanZiNEO/web-scout"
-Repository = "https://github.com/SanZiNEO/web-scout.git"
-Issues = "https://github.com/SanZiNEO/web-scout/issues"
+Homepage = "https://github.com/SanZiNEO/veddata"
+Repository = "https://github.com/SanZiNEO/veddata.git"
+Issues = "https://github.com/SanZiNEO/veddata/issues"
 
 [project.scripts]
-web-scout = "web_scout.server:main"
+veddata = "veddata.server:main"
 
 [tool.setuptools.package-dir]
 "" = "src"

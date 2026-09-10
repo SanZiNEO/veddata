@@ -1,6 +1,6 @@
-# Web Scout v1.0 — Playwright 重构计划
+# 斥候（veddata） v1.0 — Playwright 重构计划
 
-> 核心目标：将 Web Scout 从"网页查看工具"重新定义为**数据源发现与分析工具**。
+> 核心目标：将 斥候 从"网页查看工具"重新定义为**数据源发现与分析工具**。
 > AI 应该能像人开 DevTools 一样：看 DOM 树 → 找到数据源 → 打断点看数据 → 追踪值流向。
 
 ---
@@ -44,7 +44,7 @@ login.py            ← tab.cookies() 检测
 | goto 返回 | 网页文本摘要 + API 列表 | **这个页面有哪些数据、分别在什么位置、怎么触发的** |
 | API 捕获 | 一个列表，全是"XHR" | **每条数据记录触发时机 + 数据结构，不贴类型标签** |
 | 断点 | 没有 | **请求在途中暂停，AI 查看数据后决定放行/修改/中止** |
-| 值追踪 | `scout_search` 只搜 API 响应体 | **不仅搜网络请求，还搜 DOM 内嵌、JS 变量、WebSocket** |
+| 值追踪 | `ved_search` 只搜 API 响应体 | **不仅搜网络请求，还搜 DOM 内嵌、JS 变量、WebSocket** |
 
 ### 1.3 DrissionPage 的硬限制
 
@@ -67,8 +67,8 @@ login.py            ← tab.cookies() 检测
 ```
 ┌─────────────────────────────────────────────────────┐
 │                    MCP Tools                          │
-│  scout_open  scout_goto  scout_act  scout_breakpoint  │
-│  scout_dom_tree  scout_inspect  scout_trace_value     │
+│  ved_open  ved_goto  ved_act  ved_breakpoint  │
+│  ved_dom_tree  ved_inspect  ved_trace_value     │
 └──────────────────────┬──────────────────────────────┘
                        │
 ┌──────────────────────▼──────────────────────────────┐
@@ -131,7 +131,7 @@ AI 看到 "SSR 数据" 它就会往 SSR 的方向想，看到 "surface API" 它�
 
 ### 3.4 返回语义
 
-`scout_goto` 现在的返回是 "网页文本摘要 + API 列表"。
+`ved_goto` 现在的返回是 "网页文本摘要 + API 列表"。
 应该改为 "DOM 目录树 + 数据源清单"，每条数据源不带类型标签，只描述位置和触发：
 
 ```
@@ -217,7 +217,7 @@ Playwright 的 **BrowserContext** 对应一个独立的浏览器 session（cooki
 
 ```
 Browser
-├── Context 1  ← Web Scout 用这个
+├── Context 1  ← 斥候 用这个
 │   ├── Page A (tab 1)
 │   └── Page B (tab 2)
 └── Context 2  ← 可选：以后支持多 session 隔离
@@ -239,7 +239,7 @@ Playwright Python 支持同步和 async 两种 API。
 **方案 A：工具内跑 asyncio.run()**（推荐，最低侵入）
 ```python
 @mcp.tool()
-def scout_goto(url: str):
+def ved_goto(url: str):
     return asyncio.run(_async_goto(url))
 
 async def _async_goto(url):
@@ -249,7 +249,7 @@ async def _async_goto(url):
 **方案 B：FastMCP 的 async 支持**
 ```python
 @mcp.tool()
-async def scout_goto(url: str):
+async def ved_goto(url: str):
     ...  # 如果 FastMCP 支持
 ```
 
@@ -261,7 +261,7 @@ async def scout_goto(url: str):
 
 ### 5.1 目标
 
-替代当前的 `scout_elements()`（三块拼凑：交互元素 + 容器 + common actions），建立一个**在内存中持有、可查询**的 DOM 结构模型。
+替代当前的 `ved_elements()`（三块拼凑：交互元素 + 容器 + common actions），建立一个**在内存中持有、可查询**的 DOM 结构模型。
 
 和浏览器的区别：
 - 浏览器的 Elements 面板是实时 DOM，操作会同步到页面
@@ -305,7 +305,7 @@ class DOMTree:
 ### 5.3 快照过程
 
 ```
-scout_goto(url)  或  scout_dom_tree()
+ved_goto(url)  或  ved_dom_tree()
   ↓
 page.evaluate(js) → 从 document.body 递归遍历
   ↓
@@ -313,7 +313,7 @@ page.evaluate(js) → 从 document.body 递归遍历
   ↓
 反序列化为 DOMTree 对象 → 存到 state._dom_trees[tab_id]
   ↓
-scout_dom_tree() 直接从内存读，不再调浏览器
+ved_dom_tree() 直接从内存读，不再调浏览器
 ```
 
 ### 5.4 输出格式（给 AI 看）
@@ -343,7 +343,7 @@ div#app
 
 ```python
 @mcp.tool()
-def scout_dom_tree(
+def ved_dom_tree(
     depth: int = 4,
     tab: str = "",
 ) -> str:
@@ -354,7 +354,7 @@ def scout_dom_tree(
     """
 
 @mcp.tool()
-def scout_dom_search(
+def ved_dom_search(
     text: str,
     tab: str = "",
 ) -> str:
@@ -365,7 +365,7 @@ def scout_dom_search(
     """
 
 @mcp.tool()
-def scout_dom_locate(
+def ved_dom_locate(
     path: str,
     tab: str = "",
 ) -> str:
@@ -380,13 +380,13 @@ def scout_dom_locate(
 
 | 事件 | 行为 |
 |------|------|
-| `scout_goto` | 重新扫描，覆盖旧树 |
-| `scout_tab_switch` | 如果目标 tab 有缓存的树就用缓存，没有就自动扫 |
-| `scout_act("click", ...)` | 不自动重扫（点击可能改变 DOM，但 AI 需要时手动调 scout_dom_tree） |
-| `scout_tab_close` | 删除该 tab 的树 |
-| `scout_close` | 清空所有树 |
+| `ved_goto` | 重新扫描，覆盖旧树 |
+| `ved_tab_switch` | 如果目标 tab 有缓存的树就用缓存，没有就自动扫 |
+| `ved_act("click", ...)` | 不自动重扫（点击可能改变 DOM，但 AI 需要时手动调 ved_dom_tree） |
+| `ved_tab_close` | 删除该 tab 的树 |
+| `ved_close` | 清空所有树 |
 
-替换当前的 `scout_elements()`。
+替换当前的 `ved_elements()`。
 
 ---
 
@@ -521,7 +521,7 @@ async def scan_embedded(page) -> list[dict]:
 
 ### 6.5 触发时机追踪
 
-`scout_act` 在执行每个操作时更新 NetworkMonitor 的触发上下文：
+`ved_act` 在执行每个操作时更新 NetworkMonitor 的触发上下文：
 
 ```python
 # act.py
@@ -544,7 +544,7 @@ def _do_action(tab, monitor, step):
 你和 js-reverse-mcp 最大的区别在这里：
 
 ```
-js-reverse-mcp 的断点：                 Web Scout 的断点：
+js-reverse-mcp 的断点：                 斥候 的断点：
   pause → AI 看 → step → pause → AI 看    设多个断点 → 触发 → 全部自动记录 → 一起返回
   （交互式调试，适合人）                     （批量化观测，适合 AI）
 ```
@@ -568,11 +568,11 @@ AI 不需要像人一样一步一步调试。它要做的是：
 ### 7.3 数据流
 
 ```
-scout_watch(observations=[...])
+ved_watch(observations=[...])
   ↓
 注册 N 个观测点（request 注册 page.route，js 注册 CDP Debugger）
   ↓
-scout_act("click", "加载更多")
+ved_act("click", "加载更多")
   ↓
 [观测点 #1] 请求 /api/list 匹配 → 记录参数 + 响应 → 放行
 [观测点 #2] 代码 encrypt() 行命中 → 记录变量 → resume
@@ -673,17 +673,17 @@ class WatchEngine:
 ```
 全局搜索（跨所有文件/请求）           局部查看（看单个文件/请求的上下文）
 ─────────────────────────────        ─────────────────────────────
-scout_search_scripts("userid")       scout_script_source("app.js", query="userid")
+ved_search_scripts("userid")       ved_script_source("app.js", query="userid")
   → app.js: 3 matches                  → 显示 app.js 里匹配行 + 前后各 3 行
   → utils.js: 1 match                  → 行 145: const data = {userid: 123}
   → crypto.js: 0 matches               → 行 147: const encrypted = encrypt(userid)
 
-scout_search("userid")               scout_inspect(3)
+ved_search("userid")               ved_inspect(3)
   → GET /api/profile: body.user.id     → 显示这个请求的完整响应体
   → POST /api/auth: body.user_id
   → #__NEXT_DATA__: page.user.id
 
-scout_dom_search("userid")           scout_dom_locate("div.user-info")
+ved_dom_search("userid")           ved_dom_locate("div.user-info")
   → div.user-info > span#uid           → 显示这个节点及其子树
   → script#__NEXT_DATA__
 ```
@@ -693,7 +693,7 @@ scout_dom_search("userid")           scout_dom_locate("div.user-info")
 
 ```python
 @mcp.tool()
-def scout_search_scripts(
+def ved_search_scripts(
     query: str,
     tab: str = "",
 ) -> str:
@@ -712,7 +712,7 @@ def scout_search_scripts(
     """
 
 @mcp.tool()
-def scout_script_source(
+def ved_script_source(
     url: str,
     query: str = "",
     context_lines: int = 3,
@@ -721,17 +721,17 @@ def scout_script_source(
 ) -> str:
     """局部查看：查看某个脚本源码，支持搜索高亮和上下文。
     
-    url: 脚本 URL（从 scout_list_scripts 或 scout_search_scripts 获取）
+    url: 脚本 URL（从 ved_list_scripts 或 ved_search_scripts 获取）
     query: 搜索字符串，匹配行会高亮
     context_lines: 匹配行前后显示几行上下文
     start_line / line_count: 翻页查看（大文件分段读）
     """
 
 @mcp.tool()
-def scout_list_scripts(tab: str = "") -> str:
+def ved_list_scripts(tab: str = "") -> str:
     """列出页面所有 JS 脚本的 URL、大小和行数。
     
-    用于定位目标脚本后传给 scout_script_source。
+    用于定位目标脚本后传给 ved_script_source。
     """
 ```
 ## 8. Phase 5: 值追踪器
@@ -768,13 +768,13 @@ def scout_list_scripts(tab: str = "") -> str:
 
 ### 8.3 和断点的联动
 
-`scout_trace_value` 的每条匹配结果都包含位置信息，可直接用于 `scout_watch` 设观测点。
+`ved_trace_value` 的每条匹配结果都包含位置信息，可直接用于 `ved_watch` 设观测点。
 
 ### 8.4 工具
 
 ```python
 @mcp.tool()
-def scout_trace_value(
+def ved_trace_value(
     value: str,
     tab: str = "",
 ) -> str:
@@ -789,7 +789,7 @@ def scout_trace_value(
 
 js-reverse-mcp 有的功能我们是否覆盖：
 
-| 功能 | js-reverse-mcp | Web Scout 计划 |
+| 功能 | js-reverse-mcp | 斥候 计划 |
 |------|:-------------:|:--------------:|
 | XHR 断点 | ✅ | ✅ Phase 4 |
 | JS 断点（设置/移除/列表） | ✅ | ✅ Phase 4 |
@@ -820,7 +820,7 @@ js-reverse-mcp 有的功能我们是否覆盖：
 
 ```python
 @mcp.tool()
-def scout_console(
+def ved_console(
     code: str = "",
     tail: int = 0,
     filter: str = "",
@@ -870,16 +870,16 @@ class ConsoleCapture:
 
 ```
 查看控制台错误：
-  scout_console(filter="error")
+  ved_console(filter="error")
   → [error] Uncaught TypeError: Cannot read property 'id' of undefined
       at app.js:147
 
 验证加密结果：
-  scout_console(code="encrypt('test', 'key')")
+  ved_console(code="encrypt('test', 'key')")
   → "a1b2c3d4..."
 
 查看当前页面状态：
-  scout_console(code="JSON.stringify(window.__INITIAL_STATE__).slice(0, 1000)")
+  ved_console(code="JSON.stringify(window.__INITIAL_STATE__).slice(0, 1000)")
   → {page: 1, user: {id: 123, name: "xxx"}}
 ```
 
@@ -889,54 +889,54 @@ class ConsoleCapture:
 
 | 工具 | 变化 |
 |------|------|
-| `scout_open` | 内部 DrissionPage → Playwright，语义不变 |
-| `scout_goto` | 内部重写，返回内容改为数据源分类 + DOM 树 |
-| `scout_close` | 不变 |
-| `scout_tabs` | 不变 |
-| `scout_tab_switch` | 不变 |
-| `scout_tab_close` | 不变 |
+| `ved_open` | 内部 DrissionPage → Playwright，语义不变 |
+| `ved_goto` | 内部重写，返回内容改为数据源分类 + DOM 树 |
+| `ved_close` | 不变 |
+| `ved_tabs` | 不变 |
+| `ved_tab_switch` | 不变 |
+| `ved_tab_close` | 不变 |
 
 ### 10.2 观察（合并 + 新增）
 
 | 工具 | 变化 |
 |------|------|
-| `scout_fetch` | 保留（读页面全文） |
-| `scout_screenshot` | 保留 |
-| `scout_elements` | **删除**，由 `scout_dom_tree` 替代 |
-| `scout_cookies` | 保留 |
-| **`scout_dom_tree`** | **新增**，结构化 DOM 目录树 |
+| `ved_fetch` | 保留（读页面全文） |
+| `ved_screenshot` | 保留 |
+| `ved_elements` | **删除**，由 `ved_dom_tree` 替代 |
+| `ved_cookies` | 保留 |
+| **`ved_dom_tree`** | **新增**，结构化 DOM 目录树 |
 
 ### 10.3 交互（不变）
 
 | 工具 | 变化 |
 |------|------|
-| `scout_act` | 内部元素定位从 `_find_el_by_text` → Playwright locator |
-| `scout_login` | 保留，`cookies()` API 微调 |
+| `ved_act` | 内部元素定位从 `_find_el_by_text` → Playwright locator |
+| `ved_login` | 保留，`cookies()` API 微调 |
 
 ### 10.4 发现（大改）
 
 | 工具 | 变化 |
 |------|------|
-| `scout_apis` | 保留 |
-| `scout_inspect` | 保留 |
-| `scout_search` | **增强**：不仅搜网络请求，还搜 DOM 内嵌、JS 变量、WebSocket |
-| `scout_context` | **增强**：同上 |
-| `scout_export` | 保留 |
-| `scout_export_all` | 保留 |
-| `scout_peek` | 保留 |
-| `scout_request` | 保留，内部从 `SessionPage` → httpx |
-| **`scout_watch`** | **新增**，注册多个观测点（请求+JS），触发后一次返回快照 |
-| **`scout_list_scripts`** | **新增**，列出页面所有 JS 脚本 |
-| **`scout_search_scripts`** | **新增**，全局搜所有 JS 源码 |
-| **`scout_script_source`** | **新增**，查看单个脚本源码，支持搜索高亮和上下文 |
-| **`scout_trace_value`** | **新增**，值追踪器 |
-| **`scout_console`** | **新增**，在页面执行 JS/查看控制台消息 |
+| `ved_apis` | 保留 |
+| `ved_inspect` | 保留 |
+| `ved_search` | **增强**：不仅搜网络请求，还搜 DOM 内嵌、JS 变量、WebSocket |
+| `ved_context` | **增强**：同上 |
+| `ved_export` | 保留 |
+| `ved_export_all` | 保留 |
+| `ved_peek` | 保留 |
+| `ved_request` | 保留，内部从 `SessionPage` → httpx |
+| **`ved_watch`** | **新增**，注册多个观测点（请求+JS），触发后一次返回快照 |
+| **`ved_list_scripts`** | **新增**，列出页面所有 JS 脚本 |
+| **`ved_search_scripts`** | **新增**，全局搜所有 JS 源码 |
+| **`ved_script_source`** | **新增**，查看单个脚本源码，支持搜索高亮和上下文 |
+| **`ved_trace_value`** | **新增**，值追踪器 |
+| **`ved_console`** | **新增**，在页面执行 JS/查看控制台消息 |
 
 ### 10.5 扫描
 
 | 工具 | 变化 |
 |------|------|
-| `scout_scan` | 保留，扩展 `mode` 参数 |
+| `ved_scan` | 保留，扩展 `mode` 参数 |
 
 ### 10.6 工具总数变化
 
@@ -953,7 +953,7 @@ class ConsoleCapture:
 
 ### 问题
 
-当前 Web Scout 的工具描述写得"太像浏览器"了。例如 `scout_fetch` 的 docstring 写着 "获取当前页面的完整文本内容"——AI 一看就觉得这是个好用的网页阅读器，遇到"帮我看看这个页面"的需求就优先选它。这不怪 AI。
+当前 斥候 的工具描述写得"太像浏览器"了。例如 `ved_fetch` 的 docstring 写着 "获取当前页面的完整文本内容"——AI 一看就觉得这是个好用的网页阅读器，遇到"帮我看看这个页面"的需求就优先选它。这不怪 AI。
 
 ### 原则：页面访问是手段，数据发现是目的
 
@@ -965,22 +965,22 @@ class ConsoleCapture:
 
 | 工具 | 当前描述（问题） | 改后描述 |
 |------|----------------|---------|
-| `scout_open` | "Open / manage the browser session." | "**启动数据发现会话**。打开浏览器以开始捕获页面数据源。浏览网页？这是前置步骤，不是终点。" |
-| `scout_goto` | "Navigate to a URL and capture API requests." | "**导航到目标页面，自动发现所有数据来源。** 返回 DOM 结构、网络请求、内嵌数据、JS 变量的完整清单。" |
-| `scout_fetch` | "Get the full text content of the current page." | "**获取页面全文，辅助定位数据关键词。** 当需要从页面文本中选取关键词来反查 API 时使用。不是浏览器替代品。" |
-| `scout_apis` | "List all captured API endpoints." | "**列出已捕获的所有数据。** 包括网络请求、DOM 内嵌数据、JS 变量等。每条记录标注触发时机，不贴类型标签。" |
-| `scout_search` | "Search for data by keyword across captured network data." | "**在已捕获的所有数据中搜索关键词。** 包括网络请求、DOM 内嵌 JSON、页面渲染文本和 JS 全局变量。" |
-| `scout_peek` | "One-shot API discovery." | "**快速探测指定 URL 的数据源。** 打开页面 → 自动捕获 API → 返回字段文档。" |
+| `ved_open` | "Open / manage the browser session." | "**启动数据发现会话**。打开浏览器以开始捕获页面数据源。浏览网页？这是前置步骤，不是终点。" |
+| `ved_goto` | "Navigate to a URL and capture API requests." | "**导航到目标页面，自动发现所有数据来源。** 返回 DOM 结构、网络请求、内嵌数据、JS 变量的完整清单。" |
+| `ved_fetch` | "Get the full text content of the current page." | "**获取页面全文，辅助定位数据关键词。** 当需要从页面文本中选取关键词来反查 API 时使用。不是浏览器替代品。" |
+| `ved_apis` | "List all captured API endpoints." | "**列出已捕获的所有数据。** 包括网络请求、DOM 内嵌数据、JS 变量等。每条记录标注触发时机，不贴类型标签。" |
+| `ved_search` | "Search for data by keyword across captured network data." | "**在已捕获的所有数据中搜索关键词。** 包括网络请求、DOM 内嵌 JSON、页面渲染文本和 JS 全局变量。" |
+| `ved_peek` | "One-shot API discovery." | "**快速探测指定 URL 的数据源。** 打开页面 → 自动捕获 API → 返回字段文档。" |
 
 ### README 和 MCP instructions 也要改
 
-当前 `server.py` 的 `instructions`（FastMCP 的全局说明）开头是 "Web Scout discovers web API endpoints..." 这个方向是对的，但后面跟着的推荐工作流需要调整——**不要第一步就提 "scout_open → scout_goto"，而是第一步就说"这个工具是用来发现数据源的，浏览页面只是手段"。**
+当前 `server.py` 的 `instructions`（FastMCP 的全局说明）开头是 "斥候 discovers web API endpoints..." 这个方向是对的，但后面跟着的推荐工作流需要调整——**不要第一步就提 "ved_open → ved_goto"，而是第一步就说"这个工具是用来发现数据源的，浏览页面只是手段"。**
 
 关键改动位置：
 
 ```
 # server.py — FastMCP 的 instructions 字符串
-当前: "Web Scout discovers web API endpoints..."
+当前: "斥候 discovers web API endpoints..."
 改后: "数据源发现工具，不是浏览器。用于分析页面数据来源、捕获 API、跟踪数据流。"
       "如果你只是要看一个网页，有其他 MCP 工具更合适。"
 ```
@@ -997,13 +997,13 @@ Phase 1 ─ 浏览器层移植 (browser.py + network_monitor.py)
   ├── 重写 browser.py（同步壳包异步）
   ├── 重写 network_monitor.py（事件驱动替代轮询）
   ├── 改 requester.py（APIRequestContext 替代 SessionPage）
-  └── 验证：跑通 scout_open → scout_goto → scout_apis → scout_tabs
+  └── 验证：跑通 ved_open → ved_goto → ved_apis → ved_tabs
       [验收: 所有导航工具能用，API 能捕获]
 
 Phase 2 ─ DOM 目录树 (dom.py)
   ├── 新增 JS 递归遍历 DOM → 结构化树
   ├── 容器折叠算法
-  └── scout_dom_tree 工具
+  └── ved_dom_tree 工具
       [验收: 能产出一棵可读的 DOM 树，包含容器、字段、交互标记]
 
 Phase 3 ─ 网络监听 + 数据捕获 (network_monitor.py)
@@ -1012,25 +1012,25 @@ Phase 3 ─ 网络监听 + 数据捕获 (network_monitor.py)
   ├── DOM 内嵌数据扫描 (evaluate #__NEXT_DATA__ 等)
   ├── JS 全局变量扫描 (window.__xxx__)
   ├── WebSocket/SSE 检测
-  └── scout_goto 返回语义改为不带标签的数据清单
+  └── ved_goto 返回语义改为不带标签的数据清单
 Phase 4 ─ 批量观测系统 (watch_engine.py)
   ├── WatchEngine（请求观测：page.route + 记录 + 放行）
   ├── WatchEngine（JS 观测：CDP Debugger + 变量提取 + 自动 resume）
-  ├── scout_list_scripts / scout_search_scripts（脚本源码分析）
-  ├── scout_watch（注册多个观测点，一次返回）
-  └── 和 scout_act 联动：操作触发观测 → 全部自动记录 → 一起返回
+  ├── ved_list_scripts / ved_search_scripts（脚本源码分析）
+  ├── ved_watch（注册多个观测点，一次返回）
+  └── 和 ved_act 联动：操作触发观测 → 全部自动记录 → 一起返回
       [验收: 能搜 JS 源码 → 设观测点 → 触发 → 一次拿到所有变量值]
 
-Phase 5 ─ 值追踪 (scout_trace_value + scout_search/scout_context 增强)
+Phase 5 ─ 值追踪 (ved_trace_value + ved_search/ved_context 增强)
   ├── 跨数据源搜索逻辑（JS 源码 + 网络请求 + DOM 内嵌 + 渲染文本 + WS）
-  ├── scout_trace_value 工具
-  └── scout_search / scout_context 扩展为搜全部数据源
+  ├── ved_trace_value 工具
+  └── ved_search / ved_context 扩展为搜全部数据源
       [验收: 追踪一个 userid → 显示它在 JS 源码/网络/DOM/变量各处的值]
 
 Phase 6 ─ 控制台 (console)
   ├── ConsoleCapture（page.on("console") 消息收集）
-  ├── scout_console(code) 执行 JS
-  └── scout_console() 查看控制台历史
+  ├── ved_console(code) 执行 JS
+  └── ved_console() 查看控制台历史
       [验收: 执行 JS → 看结果；查看 console.log/error 消息]
 
 ### 依赖关系
@@ -1051,7 +1051,7 @@ Phase 6 ──── 依赖 Phase 1（只需要 page.evaluate 和 console 事件
 ## 13. 文件结构
 
 ```
-src/web_scout/
+src/veddata/
 ├── __init__.py
 ├── server.py              # FastMCP 入口，工具注册（改）
 ├── state.py               # 全局状态（改，适配 async）
@@ -1086,11 +1086,11 @@ src/web_scout/
 
 ### B. 断点列表清空
 
-`scout_open` / `scout_goto` / `scout_close` 时清除所有断点和暂停队列。
+`ved_open` / `ved_goto` / `ved_close` 时清除所有断点和暂停队列。
 
 ### C. 多 Tab 断点
 
-每个 tab 独立注册 route handler，互不干扰。`scout_breakpoint` 接受 `tab` 参数。
+每个 tab 独立注册 route handler，互不干扰。`ved_breakpoint` 接受 `tab` 参数。
 
 ### D. 与 DrissionPage 的兼容
 

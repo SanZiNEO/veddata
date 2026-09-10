@@ -25,11 +25,14 @@ async def exec_request(
     Returns:
         Formatted response string.
     """
-    from web_scout import state
+    from veddata import state
 
     url = record.get("url", "").split("?")[0]
     method = record.get("method", "GET")
-    req_headers = dict(record.get("request_headers", {})) if record.get("request_headers") else {}
+    # 过滤 HTTP/2 伪头（:authority 等）：httpx 拒收，历史记录里可能还留着
+    req_headers = {
+        k: v for k, v in (record.get("request_headers") or {}).items() if not k.startswith(":")
+    }
     req_params = dict(record.get("request_params", {})) if record.get("request_params") else {}
     req_body = record.get("request_body")
 

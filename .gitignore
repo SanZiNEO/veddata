@@ -217,7 +217,11 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# web-scout
+# veddata
+.veddata/
+.veddata-smoke/
+# 改名前的旧目录，保留忽略直到迁移完成后再删
 .web-scout-data/
+.web-scout-data-smoke/
 response/
 

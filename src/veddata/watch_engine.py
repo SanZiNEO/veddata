@@ -61,7 +61,7 @@ class WatchEngine:
                 "type": "request",
                 "url": req.url,
                 "method": req.method,
-                "headers": dict(req.headers),
+                "headers": {k: v for k, v in dict(req.headers).items() if not k.startswith(":")},
                 "timestamp": time.time(),
             })
             self._mark_hit(watch_id)

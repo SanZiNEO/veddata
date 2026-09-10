@@ -18,6 +18,8 @@ import uuid
 
 from playwright.async_api import BrowserContext, Page, Playwright
 
+from veddata import paths
+
 
 class BrowserSession:
     """Manages a single Chromium instance with multiple tabs.
@@ -45,7 +47,7 @@ class BrowserSession:
 
         headless = os.environ.get("HEADLESS", "false") == "true"
         browser_path = os.environ.get("BROWSER_PATH", "")
-        user_data = os.environ.get("USER_DATA_DIR", "")
+        user_data = str(paths.profile_dir())
         address = os.environ.get("BROWSER_ADDRESS", "")
 
         if address:
@@ -55,7 +57,7 @@ class BrowserSession:
         else:
             channel = "msedge" if browser_path == "edge" else (browser_path or None)
             self._context = await self._playwright.chromium.launch_persistent_context(
-                user_data_dir=user_data or ".web-scout-data",
+                user_data_dir=user_data,
                 headless=headless,
                 channel=channel,
             )
@@ -93,7 +95,7 @@ class BrowserSession:
         if set_current:
             self._current_tab = tid
         # 事件监听统一挂接点（monitor / script registry / console）
-        from web_scout import state
+        from veddata import state
         await state.attach_page(page)
 
     def _unregister_tab(self, page: Page) -> None:
@@ -102,7 +104,7 @@ class BrowserSession:
         if tid is None:
             return
         self._pages.pop(tid, None)
-        from web_scout import state
+        from veddata import state
         state._dom_trees.pop(tid, None)
         state._script_registries.pop(tid, None)
         state._watches.pop(tid, None)

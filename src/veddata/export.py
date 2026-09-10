@@ -1,14 +1,25 @@
 """Export module — JSON response compression, field documentation, raw data packet saving."""
 
 import json
-import os
+from pathlib import Path
+
+from veddata import naming, paths
 
 
 class Exporter:
     """Compress API responses, generate field docs, and save raw data packets."""
 
-    def __init__(self, response_dir: str = "./response"):
-        self.response_dir = response_dir
+    def __init__(self, response_dir: str | None = None):
+        # 显式给的那个目录；没给就用 --response-dir（都在 resolve_dir 里落地）
+        self.response_dir = Path(response_dir) if response_dir else None
+
+    def resolve_dir(self, output_dir: str | None = None) -> Path:
+        """本次写盘落到哪个目录：调用参数 > ``--response-dir``；都没有则报错。
+
+        Raises:
+            paths.PathError: 未配置输出目录，或路径非法（相对路径/指向文件/建不了）。
+        """
+        return paths.resolve_response_dir(output_dir or self.response_dir)
 
     def export(self, api_record: dict, format: str = "both", output_dir: str | None = None) -> str:
         """Export an API data source.
@@ -16,10 +27,13 @@ class Exporter:
         Args:
             api_record: A record dict from NetworkMonitor.api_records.
             format: "raw" | "compact" | "both"
-            output_dir: Override save directory for this call (default self.response_dir).
+            output_dir: Override save directory for this call (default: --response-dir).
 
         Returns:
             Status message with output details.
+
+        Raises:
+            paths.PathError: format 含 raw 但没配置输出目录时。
         """
         parts = []
 
@@ -36,38 +50,24 @@ class Exporter:
     def save_raw(self, api_record: dict, output_dir: str | None = None) -> str:
         """Save the raw JSON response to a file.
 
-        Filename is derived from the URL path (last two segments).
+        文件名：``<站点名>_<接口名>_<YYYYMMDD-HHMMSS>.json``（见 veddata.naming）。
 
         Args:
-            output_dir: Override save directory (default self.response_dir).
+            output_dir: Override save directory (default: --response-dir).
 
         Returns:
-            File path of the saved JSON.
+            Absolute path of the saved JSON.
+
+        Raises:
+            paths.PathError: 没配置输出目录，或路径非法。
         """
-        url = api_record["url"]
-        api_path = url.split("?")[0]
-        parts = [p for p in api_path.rstrip("/").split("/") if p]
+        save_dir = self.resolve_dir(output_dir)
+        filepath = naming.unique_path(save_dir, naming.export_stem(api_record["url"]), ".json")
 
-        if len(parts) >= 2:
-            filename = f"{parts[-2]}_{parts[-1]}.json"
-        elif parts:
-            filename = f"{parts[-1]}.json"
-        else:
-            filename = "api_response.json"
-
-        save_dir = output_dir or self.response_dir
-        filepath = os.path.join(save_dir, filename)
-        base, ext = os.path.splitext(filepath)
-        counter = 1
-        while os.path.exists(filepath):
-            counter += 1
-            filepath = f"{base}_page{counter}{ext}"
-
-        os.makedirs(save_dir, exist_ok=True)
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(api_record["response_body"], f, ensure_ascii=False, indent=2)
 
-        return filepath
+        return str(filepath)
 
     def compact(self, api_record: dict) -> str:
         """Generate a compressed field document from an API response.
