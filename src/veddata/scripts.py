@@ -83,16 +83,33 @@ class ScriptRegistry:
             })
 
     async def get_source(self, url: str) -> str | None:
-        """返回脚本源码（缓存）。CDP 拿不到时用 page.request 下载。
+        """返回脚本源码（缓存）。
 
-        第一次真要读脚本时才开 Debugger（见 :meth:`enable`）—— 平时不挂着调试器，
-        和 DrissionPage / 裸 CDP 客户端"用到才 enable"一致。
+        顺序：**先用网络直取**（``page.request``，不挂调试器）→ 拿不到才开 Debugger
+        走 ``Debugger.getScriptSource``（内联脚本 / data: URI / 网络取不到的才走这条）。
+
+        这样"读源码"不会让页面多出一个调试器；只有真要打断点（监测点）时才挂 ——
+        JS 观测点由 ``watch_engine`` 自己 ``Debugger.enable``，不依赖这里。
         """
-        await self.enable()
         if url in self._sources:
             return self._sources[url]
+
+        # 1) 网络直取：不碰调试器
+        if self._page is not None and url.lower().startswith(("http://", "https://")):
+            try:
+                resp = await self._page.request.get(url)
+                if resp.ok:
+                    source = await resp.text()
+                    if source:
+                        self._cache(url, source)
+                        return source
+            except Exception:
+                pass
+
+        # 2) 兜底：开 Debugger 从运行时取
         info = self._scripts.get(url)
         if info and info.get("script_id") and self._cdp:
+            await self.enable()
             try:
                 result = await self._cdp.send("Debugger.getScriptSource", {"scriptId": info["script_id"]})
                 source = result.get("scriptSource", "")
@@ -101,14 +118,6 @@ class ScriptRegistry:
                     return source
             except Exception:
                 pass
-        try:
-            resp = await self._page.request.get(url)
-            if resp.ok:
-                source = await resp.text()
-                self._cache(url, source)
-                return source
-        except Exception:
-            pass
         return None
 
     def _cache(self, url: str, source: str) -> None:
