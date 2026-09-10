@@ -4,7 +4,7 @@ import asyncio
 import json as _json
 import time
 
-from veddata import limits, paths, state, watch_policy
+from veddata import limits, observation, paths, state, watch_policy
 from veddata.browser import BrowserSession
 from veddata.network_monitor import NetworkMonitor
 from veddata.export import Exporter
@@ -522,6 +522,7 @@ def _format_watch_report(snapshots: list[dict], limit: int = 5) -> str:
 
 
 @state.mcp.tool()
+@observation.guarded
 async def ved_watch(
     observations: list | None = None,
     collect: bool = False,
@@ -628,6 +629,7 @@ async def ved_watch(
 
 
 @state.mcp.tool()
+@observation.guarded
 async def ved_list_scripts(
     tab: str = "",
     offset: int = 0,
@@ -670,6 +672,7 @@ async def ved_list_scripts(
 
 
 @state.mcp.tool()
+@observation.guarded
 async def ved_search_scripts(
     query: str,
     tab: str = "",
@@ -732,6 +735,7 @@ async def ved_search_scripts(
 
 
 @state.mcp.tool()
+@observation.guarded
 async def ved_script_source(
     url: str,
     query: str = "",

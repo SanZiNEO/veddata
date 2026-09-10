@@ -156,3 +156,25 @@ def remediate(error: Exception) -> str:
 def stamp() -> float:
     """给调试用：变更时刻。"""
     return time.time()
+
+
+def guarded(fn):
+    """工具装饰器：**依赖活状态**的工具先过准入检查，被拦时返回恢复文案（不抛异常）。
+
+    用法（注意放在 ``state.mcp.tool()`` **里面**）::
+
+        @state.mcp.tool()
+        @guarded
+        async def ved_act(...): ...
+    """
+    import functools
+
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        try:
+            require(fn.__name__)
+        except StatePolicyError as exc:
+            return remediate(exc)
+        return await fn(*args, **kwargs)
+
+    return wrapper

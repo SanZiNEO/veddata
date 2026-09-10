@@ -3,13 +3,14 @@
 import asyncio
 import json as _json
 
-from veddata import limits, state
+from veddata import limits, observation, state
 from veddata.browser import BrowserSession
 from veddata.network_monitor import NetworkMonitor
 from veddata.dom import snapshot_tree
 
 
 @state.mcp.tool()
+@observation.guarded
 async def ved_scan(
     mode: str = "all",
     keyword: str | None = None,

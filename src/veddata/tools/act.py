@@ -2,8 +2,7 @@
 
 import asyncio
 
-from veddata import state
-from veddata.login import LoginDetector
+from veddata import gate, observation, state
 
 
 async def _find_locator(page, text, kinds):
@@ -118,6 +117,7 @@ async def _do_action(page, pool, step):
 
 
 @state.mcp.tool()
+@observation.guarded
 async def ved_act(
     action: str = "",
     value: str | None = None,
@@ -162,7 +162,7 @@ async def ved_act(
         report_lines = [f"{state.prefix(tab_id)}", f"Action chain ({len(actions)} steps):\n"]
         for step in actions:
             report_lines.append(await _do_action(page, pool, step))
-        return "\n".join(report_lines)
+        return await _finish(page, tab_id, "\n".join(report_lines))
 
     step = {"action": action}
     if value is not None:
@@ -171,37 +171,19 @@ async def ved_act(
         step["target"] = target
     report_lines = [state.prefix(tab_id), ""]
     report_lines.append(await _do_action(page, pool, step))
-    return "\n".join(report_lines)
+    return await _finish(page, tab_id, "\n".join(report_lines))
 
 
-@state.mcp.tool()
-async def ved_login(timeout: int = 300) -> str:
-    """Wait for the user to manually log in via the browser window.
+async def _finish(page, tab_id: str, report: str) -> str:
+    """动作收尾：先看有没有撞上人机门，再把状态账本推到当前版本。
 
-    Detects login by polling cookies: if cookie names change or ≥2 values
-    change simultaneously, login is detected.  Works across all sites
-    without site-specific logic.
-
-    Args:
-        timeout: Maximum wait time in seconds (default 300).
-
-    Returns:
-        Status message with refreshed page text.
+    撞上人机门（登录 / 验证 / 风控）**不重试、不等待** —— 把话说明白交给用户，
+    用户处理完让 AI 继续（协作协议见 gate.py）。
     """
-    if not state._browser:
-        return "Error: no browser session."
-
-    page = await state._browser.get_current_page()
-    if page is None:
-        return "Error: no page available."
-
-    detector = LoginDetector(page)
-    result = await detector.wait_for_login(timeout)
-
-    if result:
-        text = await state._browser.get_text()
-        return (f"{state.current_prefix()}\n"
-                f"Login successful!\n\n"
-                f"Page text:\n{text[:2000]}")
-    else:
-        return f"Login timeout ({timeout}s). Please try again."
+    block = await gate.detect_async(page, tab_id)
+    observation.observe()            # 我们自己发起的动作：返回的就是最新状态
+    if block is not None and block.hard:
+        return gate.format_gate(block, state.prefix(tab_id))
+    if block is not None:
+        return f"{gate.format_gate(block, state.prefix(tab_id))}\n\n{report}"
+    return report

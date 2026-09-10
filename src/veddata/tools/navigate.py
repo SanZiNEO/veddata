@@ -2,7 +2,7 @@
 
 import asyncio
 
-from veddata import limits, state
+from veddata import gate, limits, observation, state
 from veddata.browser import BrowserSession
 from veddata.network_monitor import NetworkMonitor
 from veddata.dom import snapshot_tree
@@ -57,6 +57,7 @@ async def ved_open() -> str:
             if tid:
                 browser._current_tab = tid
 
+    observation.observe()            # 会话刚建立：此刻状态就是 AI 的第一份认知
     return "Browser ready."
 
 
@@ -126,6 +127,7 @@ def _format_actions(tree) -> list[str]:
 
 
 @state.mcp.tool()
+@observation.guarded
 async def ved_goto(url: str, new_tab: bool = False, depth: int = limits.TREE_DEPTH, limit: int = 10) -> str:
     """导航到目标页面，自动发现所有数据来源。返回 DOM 结构、网络请求、内嵌数据清单。
 
@@ -221,10 +223,17 @@ async def ved_goto(url: str, new_tab: bool = False, depth: int = limits.TREE_DEP
             parts.append(f"…(显示 12 / 共 {len(actions)} 个可交互元素)")
     else:
         parts.append("(no interactive elements found)")
-    return limits.truncate_text(
+    block = await gate.detect_async(page, tab_id)
+    observation.observe()            # 我们自己发起的跳转：返回的就是最新状态
+    if block is not None and block.hard:
+        return gate.format_gate(block, state.prefix(tab_id))
+    report = limits.truncate_text(
         "\n".join(parts),
         hint="想更深/更多：depth= 调树深度、limit= 调清单条数；逐项细看用 ved_dom_tree / ved_apis / ved_scan",
     )
+    if block is not None:
+        return f"{gate.format_gate(block, state.prefix(tab_id))}\n\n{report}"
+    return report
 
 
 @state.mcp.tool()
@@ -243,6 +252,7 @@ async def ved_close() -> str:
             pass
         state._browser = None
     state.set_pool(None)
+    gate.reset()
     state._dom_trees.clear()
     state._script_registries.clear()
     state._watches.clear()
@@ -252,17 +262,23 @@ async def ved_close() -> str:
 
 @state.mcp.tool()
 async def ved_tabs() -> str:
-    """List all open browser tabs with CDP short IDs.
+    """List all open browser tabs with their URLs — 这是"重新建档"的入口。
+
+    页面自己跳走、用户开关标签页之后，依赖活状态的工具会被拒绝；
+    先调这个（或 ved_status）确认现状，再继续。
 
     Returns:
-        Tab list with short IDs and current marker.
+        Tab list with short IDs, URLs, titles and current marker.
     """
     if not state._browser:
         return "No browser session."
-    return await state._browser.list_tabs()
+    listing = await state._browser.list_tabs()
+    observation.observe()
+    return listing
 
 
 @state.mcp.tool()
+@observation.guarded
 async def ved_tab_switch(tab: str) -> str:
     """Switch the active tab by CDP short ID (from ved_tabs output).
 
@@ -281,10 +297,12 @@ async def ved_tab_switch(tab: str) -> str:
     if "not found" in result:
         return result
     tid = state._browser.current_tab_id()
+    observation.observe()            # 我们自己切过去的，AI 知道现在在哪
     return f"{result}\n{state.prefix(tid)}"
 
 
 @state.mcp.tool()
+@observation.guarded
 async def ved_tab_close(tab: str = "") -> str:
     """Close browser tab(s) by CDP short ID and prune their API records.
 
@@ -308,10 +326,60 @@ async def ved_tab_close(tab: str = "") -> str:
         tid = state._browser.resolve_tab_id(short_id) or short_id
         result = await state._browser.close_tab(short_id)
         results.append(f"{result}")
+        gate.reset(tid)
         if pool:
             pool.prune(tid)
         state._dom_trees.pop(tid, None)
         state._script_registries.pop(tid, None)
         state._watches.pop(tid, None)
 
+    observation.observe()            # 我们自己关的，关完立刻重新建档
     return "\n".join(results) if len(results) > 1 else results[0]
+
+
+@state.mcp.tool()
+async def ved_status() -> str:
+    """状态体检：现在有哪些标签页、各自在哪个页面、有没有撞上人机门。
+
+    用户说"登录好了 / 验证过了"之后**先调这个** —— 不要重新导航（会再次触发风控）。
+    它同时是一次"重新建档"：调过之后依赖活状态的工具才放行。
+
+    Returns:
+        浏览器模式、状态账本、当前页、标签页清单、捕获到的 API 条数、人机门判定。
+    """
+    if not state._browser:
+        return "No browser session. Call ved_open() first."
+
+    browser = state._browser
+    lines = [f"browser: {browser.mode_note()}", f"state: {observation.ledger().describe()}"]
+
+    tab_id = browser.current_tab_id()
+    page = await browser.get_current_page()
+    if page is not None:
+        block = await gate.detect_async(page, tab_id)
+        try:
+            title = (await page.title() or "")[:80]
+        except Exception:
+            title = ""
+        try:
+            size = await page.evaluate("document.body ? document.body.innerText.length : 0")
+        except Exception:
+            size = -1
+        lines.append(f"current: {state.prefix(tab_id)}")
+        if title:
+            lines.append(f"title: {title}")
+        lines.append(f"body: {size} chars")
+        lines.append(gate.format_gate(block, "") if block is not None else "human-check: none detected")
+
+    pool = state.get_pool()
+    if pool is not None:
+        try:
+            lines.append(f"captured APIs: {len(pool.get_by_tab(tab_id))}")
+        except Exception:
+            pass
+
+    lines.append("")
+    lines.append(await browser.list_tabs())
+
+    observation.observe()
+    return "\n".join(lines)

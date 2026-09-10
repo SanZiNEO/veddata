@@ -6,7 +6,7 @@ import os
 import time
 from pathlib import Path
 
-from veddata import limits, naming, paths, state
+from veddata import limits, naming, observation, paths, state
 
 # ved_fetch 的页面文本缓存：tab id 每次启动浏览器都是新的，不清就会只增不减
 _CACHE_KEEP = 32
@@ -30,6 +30,7 @@ def _prune_cache(cache_dir: Path) -> None:
 
 
 @state.mcp.tool()
+@observation.guarded
 async def ved_fetch(max_length: int = 5000, start_index: int = 0, tab: str = "") -> str:
     """获取页面全文，辅助定位数据关键词。当需要从页面文本中选取关键词来反查数据时使用。
 
@@ -148,6 +149,7 @@ async def ved_screenshot(name: str = "", full_page: bool = True, output_dir: str
 
 
 @state.mcp.tool()
+@observation.guarded
 async def ved_dom_tree(depth: int = limits.TREE_DEPTH, tab: str = "") -> str:
     """输出当前页面的 DOM 目录树（内存快照，含容器/字段/交互标记）。
 
@@ -171,6 +173,7 @@ async def ved_dom_tree(depth: int = limits.TREE_DEPTH, tab: str = "") -> str:
 
 
 @state.mcp.tool()
+@observation.guarded
 async def ved_dom_search(
     text: str,
     tab: str = "",
@@ -206,6 +209,7 @@ async def ved_dom_search(
 
 
 @state.mcp.tool()
+@observation.guarded
 async def ved_dom_locate(path: str, depth: int = 3, tab: str = "") -> str:
     """通过路径定位一个 DOM 节点。
 
@@ -334,6 +338,7 @@ async def ved_cookies(all_domains: bool = False, all_info: bool = False, tab: st
 
 
 @state.mcp.tool()
+@observation.guarded
 async def ved_console(code: str = "", tail: int = 0, filter: str = "", tab: str = "") -> str:
     """操作页面控制台：执行 JS / 查看 log/warn/error 消息。
 
