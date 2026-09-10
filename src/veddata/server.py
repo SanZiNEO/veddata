@@ -38,6 +38,7 @@ import veddata.tools.observe
 import veddata.tools.act
 import veddata.tools.discover
 import veddata.tools.scan
+import veddata.tools.chain_tool
 
 
 def _parse_args(argv=None):
