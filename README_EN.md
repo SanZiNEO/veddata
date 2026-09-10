@@ -150,6 +150,13 @@ When `--response-dir` is configured, the **full** truncated payload is also spil
 `<response-dir>/_spill/` (newest 32 kept) and the path is included in the reply; without it you just get
 the paging parameters (no error). The data itself stays on the server, so you can always ask again.
 
+**Watch (`ved_watch`) lifecycle**:
+
+- **Register many at once**: `observations=[{...}, {...}]`; each watch gets an auto id (`w1`, `w2`, … monotonic, never reused) or your own `{"id": "login"}`
+- **`max` (default 1)**: how many hits to record — the watch is **removed automatically** once reached, so a breakpoint on a hot line won't keep interrupting the page; `max: 0` means unlimited (still bounded globally: 20 per watch / 200 total)
+- **List**: `ved_watch()` shows id / type / target / hits / state
+- **Remove**: `ved_watch(remove="w1,w3")` or `remove="all"`
+- JS watch `line` is **1-based** (same as the line numbers `ved_script_source` prints)
 ## Tools (29)
 
 ### Navigate (6)

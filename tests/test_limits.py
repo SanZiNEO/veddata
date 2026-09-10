@@ -112,3 +112,26 @@ def test_clamp_falls_back_on_garbage():
     assert limits.clamp(None, low=1, high=8, default=2) == 2
     assert limits.clamp(99, low=1, high=8, default=2) == 8
     assert limits.clamp(4, low=1, high=8, default=2) == 4
+
+
+# ---- 接口守卫 --------------------------------------------------------------
+
+
+def test_every_limits_attribute_used_in_code_exists():
+    """代码里引用的 ``limits.X`` 必须真的存在。
+
+    这条是补出来的坑：``_format_watch_report`` 用了 ``limits.HEADER_CHARS``，但常量没定义，
+    单测全绿、一到真跑观测报告就 ToolError。静态扫一遍源码，杜绝这一类。
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent / "src"
+    missing: dict[str, set[str]] = {}
+    for path in root.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        for name in re.findall(r"\blimits\.([A-Za-z_][A-Za-z0-9_]*)", text):
+            if not hasattr(limits, name):
+                missing.setdefault(name, set()).add(path.name)
+
+    assert not missing, f"引用了不存在的 limits 属性: {missing}"

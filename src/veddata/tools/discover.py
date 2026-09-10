@@ -458,6 +458,15 @@ async def _get_watch_engine(tab_id: str):
     return engine
 
 
+def _max_hits(raw) -> int:
+    """观测点的 max 字段：默认 1（只记第一次）；0 = 不限；非法值回落到 1。"""
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return 1
+    return 0 if value == 0 else max(1, value)
+
+
 def _format_watch_report(snapshots: list[dict], limit: int = 5) -> str:
     total = len(snapshots)
     shown = snapshots[: limits.clamp(limit, low=1, high=50, default=5)]
@@ -483,7 +492,10 @@ def _format_watch_report(snapshots: list[dict], limit: int = 5) -> str:
                 lines.append(f"  at {limits.clip(frame, 200)}")
         lines.append("")
     if total > len(shown):
-        lines.append(f"…(显示 {len(shown)} / 共 {total} 条快照。用 limit={total} 看全部)")
+        lines.append(
+            f"…(共采集 {total} 条 / 展示前 {len(shown)} 条。用 limit={total} 看全部；"
+            f"清理观测点用 remove='all')"
+        )
     return limits.truncate_text(
         "\n".join(lines),
         hint="快照里只留了摘要；对应请求的完整请求/响应体用 ved_inspect 看（记录都在服务端）",
@@ -497,69 +509,96 @@ async def ved_watch(
     timeout: float = 15.0,
     tab: str = "",
     limit: int = 5,
+    remove: str = "",
 ) -> str:
-    """注册多个观测点（请求+JS），触发后一次返回快照。
+    """批量观测：注册请求/JS 观测点 → 触发操作 → 一次性取回快照。
 
-    Two-step flow:
-      1. ved_watch(observations=[{...}, ...]) — 注册，返回观测点清单。
-      2. ved_act(...) — 执行操作触发观测点（自动记录并继续执行）。
-      3. ved_watch(collect=True) — 等所有观测点收齐（或超时），返回报告并清理。
+    四种用法（都不传 = 列出当前观测点）：
+      1. 注册：``ved_watch(observations=[{...}, {...}])`` —— 一次可打多个点
+      2. 列表：``ved_watch()`` —— 看 id / 类型 / 目标 / 命中数 / 状态
+      3. 收集：``ved_watch(collect=True)`` —— 等所有点命中（或超时）后返回报告
+      4. 删除：``ved_watch(remove="w1,w3")``，``remove="all"`` 清空
 
     observation 项：
-      {"type": "request", "pattern": "/api/*"}          — 匹配 URL 的请求（glob 或 /regex/）
+      {"type": "request", "pattern": "/api/*"}                      — 请求（glob 或 /regex/）
       {"type": "js", "url": "...app.js", "line": 147,
-       "variables": ["userid", "secret"]}               — 断点命中时记录变量值
+       "variables": ["userid", "secret"]}                          — JS 断点（line 是 **1-based**）
+      可选字段：{"id": "login", "max": 1}
+        id  —— 自定义 id（缺省自动分配 w1/w2…，单调递增、跨批次不重复）
+        max —— 该点最多记几次命中，默认 1；**达到后自动移除该点**（0 = 不限，仍受全局上限）
+
+    原理：JS 观测点用的是 CDP ``Debugger.setBreakpointByUrl`` —— 和人工断点同一个接口，
+    区别只在命中后自动读值并 resume，不打断页面。但也因此：断点打在热点行会反复中断，
+    所以默认只取第一次（要连续观察就调大 max）。
 
     Args:
-        observations: 观测点列表；None 且非 collect 时返回当前快照数。
-        collect: True = 等待并收集快照，然后清理观测点。
+        observations: 观测点列表。
+        collect: True = 等待收集并返回报告（保留观测点；清理用 remove）。
         timeout: 收集超时秒数（默认 15）。
         tab: CDP short ID（空 = 当前激活 tab）。
         limit: 报告里最多显示几条快照（默认 5）。
+        remove: 要删除的观测点 id，逗号分隔；"all" 表示全部删除。
 
     Returns:
-        注册清单或观测报告（快照里的 URL/headers 有截断，完整请求用 ved_inspect 看）。
+        注册清单 / 观测点列表 / 观测报告 / 删除结果。
     """
     if not state._browser:
         return "Error: no browser session."
     tab_id = state._browser.resolve_tab_id(tab) or state._browser.current_tab_id()
+    engine = state._watches.get(tab_id)
+
+    if remove:
+        if engine is None:
+            return "No watches registered."
+        wanted = [x.strip() for x in remove.split(",") if x.strip()]
+        if "all" in wanted:
+            count = len(engine.watch_ids())
+            await engine.clear()
+            return f"Removed all watches ({count})."
+        removed, missing = [], []
+        for watch_id in wanted:
+            (removed if await engine.remove(watch_id) else missing).append(watch_id)
+        parts = [f"Removed: {', '.join(removed)}" if removed else "Removed: (none)"]
+        if missing:
+            parts.append(f"not found: {', '.join(missing)}")
+        return "; ".join(parts)
 
     if observations:
         engine = await _get_watch_engine(tab_id)
         if engine is None:
             return "Error: no page available."
-        registered = []
-        for i, obs in enumerate(observations):
-            watch_id = obs.get("watch_id") or f"w{i + 1}"
+        registered, taken = [], set(engine.watch_ids())
+        for obs in observations:
             obs_type = obs.get("type", "")
+            watch_id = str(obs.get("id") or "").strip() or engine.alloc_id()
+            if watch_id in taken:
+                return f"Duplicate watch id: {watch_id}"
+            taken.add(watch_id)
+            max_hits = _max_hits(obs.get("max", 1))
             if obs_type == "request":
-                await engine.add_request_watch(obs.get("pattern", "**/*"), watch_id)
-                registered.append(f"{watch_id}(REQUEST {obs.get('pattern', '**/*')})")
+                pattern = obs.get("pattern", "**/*")
+                await engine.add_request_watch(pattern, watch_id, max_hits)
+                registered.append(f"{watch_id}(REQUEST {pattern}, max={max_hits or '∞'})")
             elif obs_type == "js":
-                await engine.add_js_watch(
-                    obs.get("url", ""),
-                    int(obs.get("line", 0)),
-                    obs.get("variables", []),
-                    watch_id,
-                )
-                registered.append(f"{watch_id}(JS {obs.get('url', '')}:{obs.get('line', 0)})")
+                url = obs.get("url", "")
+                line = int(obs.get("line", 0) or 0)
+                if line < 1:
+                    return f"JS watch '{watch_id}' needs a 1-based line number (got {line})"
+                await engine.add_js_watch(url, line, obs.get("variables", []), watch_id, max_hits)
+                registered.append(f"{watch_id}(JS {url}:{line}, max={max_hits or '∞'})")
             else:
                 return f"Unsupported observation type: {obs_type} (use 'request' or 'js')"
-        return (f"Registered {len(registered)} watches: {', '.join(registered)}")
+        return f"Registered {len(registered)} watches: {', '.join(registered)}"
 
     if collect:
-        engine = state._watches.get(tab_id)
         if engine is None:
             return "No watches registered."
         snapshots = await engine.wait_for_snapshots(timeout=timeout)
-        report = _format_watch_report(snapshots, limit)
-        await engine.clear()
-        return report
+        return _format_watch_report(snapshots, limit)
 
-    engine = state._watches.get(tab_id)
     if engine is None:
         return "No watches registered."
-    return f"Snapshots so far: {engine.snapshot_count()}, pending: {engine.pending_count()}"
+    return engine.list_watches()
 
 
 @state.mcp.tool()

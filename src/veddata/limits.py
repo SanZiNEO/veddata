@@ -36,6 +36,7 @@ LIST_LIMIT = 30                # 列表类默认条数
 TREE_DEPTH = 2                 # 树类默认深度
 VALUE_CHARS = 60               # 单值（cookie / token / header 值）截断
 URL_CHARS = 300                # URL 截断
+HEADER_CHARS = 500             # 快照里 headers 这种整块 JSON 的截断
 SPILL_DIRNAME = "_spill"
 SPILL_KEEP = 32                # spill 目录最多保留几份
 ELLIPSIS = "…"
