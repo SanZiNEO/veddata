@@ -175,7 +175,7 @@ async def ved_dom_tree(depth: int = limits.TREE_DEPTH, tab: str = "") -> str:
 @state.mcp.tool()
 @observation.guarded
 async def ved_dom_search(
-    text: str,
+    keyword: str,
     tab: str = "",
     offset: int = 0,
     limit: int = limits.LIST_LIMIT,
@@ -185,7 +185,7 @@ async def ved_dom_search(
     不调浏览器，直接在保存的树结构里查找。返回匹配的节点路径和上下文。
 
     Args:
-        text: 搜索关键字（匹配文本/属性/id，大小写不敏感）。
+        keyword: 搜索关键字（匹配文本/属性/id，大小写不敏感）。
         tab: CDP short ID（空 = 当前激活 tab）。
         offset: 从第几处匹配开始（默认 0）。
         limit: 本次返回条数（默认 30）。
@@ -196,11 +196,11 @@ async def ved_dom_search(
     tree = await _ensure_tree(tab)
     if tree is None:
         return "Error: no browser session."
-    matches = tree.search(text)
+    matches = tree.search(keyword)
     if not matches:
         return f"{state.prefix(tree.tab_id)}\nNo matches in DOM tree."
     page, footer = limits.paginate(matches, offset, limit, unit="处匹配")
-    lines = [state.prefix(tree.tab_id), f"DOM matches for '{text}':", ""]
+    lines = [state.prefix(tree.tab_id), f"DOM matches for '{keyword}':", ""]
     for path, node in page:
         summary = node.text[:60] if node.text else ""
         lines.append(f"  {path}" + (f'  "{summary}"' if summary else ""))

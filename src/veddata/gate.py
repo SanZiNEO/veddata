@@ -1,165 +1,173 @@
-"""人机门检测：登录页 / 验证码 / 风控页 —— 只发现、不处理。
+"""页面事实采集：只说"有什么"，不判定、不引导。
 
-我们不做对抗、不自动打码。发现之后由工具把话说明白：AI 转述给用户，
-用户在**可见窗口**里处理（登录 / 过验证），处理完让 AI 继续 ——
-全程不阻塞、不轮询、不挂起（对齐"等待交给人和 AI，工具只负责报告"）。
+仓库既定原则：**工具输出只陈述事实，不含"下一步该做什么"**（见 084e8dd）。
+所以这里不判"这是不是人机验证 / 要不要叫用户" —— 那是 AI 看事实自己决定的事。
+我们只递材料：
 
-判据分两档（避免误伤）
-----------------------
-- **强信号**（单独命中即判定）：URL 落在验证/登录类路径；页面出现已知验证组件
-  （极验 / 阿里滑块 / reCAPTCHA / hCaptcha / Cloudflare / 通用 captcha）；
-  文案命中验证措辞；存在密码输入框（登录）
-- **弱信号**（只提示，不硬停）：正文规模相对"上次看到的大小"塌缩
-  —— 实测参照：zhipin 城市页 2917 字 → 验证页 101 字 → 被擦 0 字
+- 最终 URL / 标题 / 正文字数 / 链接数
+- 正文样本（前若干字**原文**）
+- 命中关键词的**原文片段**（命中词 + 前后各 60 字，原样，不加工）
+- 可见的表单与组件（选择器 + 尺寸）；隐藏的单独列出
+- 正文规模相对"上次同一地址"的变化（只报数字）
 
-对齐项目既有口径：结构化、可行动、带恢复动作（同 ``watch_policy.remediate``）。
+没有任何 kind / confidence / 建议动作。
 """
 
 from __future__ import annotations
 
-import re
+import json
 from dataclasses import dataclass, field
 
-LOGIN = "login"
-CAPTCHA = "captcha"
-RISK_CONTROL = "risk_control"
+_SNIPPET = 200
+_CONTEXT = 60
 
-_VERIFY_URL = re.compile(
-    r"(verify|captcha|challenge|security[-_]?check|risk[-_]?control|/safe\b|robot|geetest|"
-    r"verify\.html|人机|验证)",
-    re.I,
-)
-_LOGIN_URL = re.compile(r"(/(login|signin|sign-in|logon|passport|auth)\b|login\.htm|signin\.htm)", re.I)
-
-_WIDGETS = ",".join([
-    "#nc_1_wrapper", ".nc-container", ".geetest_panel", ".geetest_holder", ".geetest_box",
-    ".cf-turnstile", "#challenge-form", ".g-recaptcha", ".h-captcha",
-    "iframe[src*='recaptcha']", "iframe[src*='hcaptcha']", "iframe[src*='challenges.cloudflare.com']",
-    "iframe[src*='captcha']", "input[name*='captcha' i]", "#captcha", ".verify-wrap", ".verify-box",
-])
-
-_MARKERS = [
-    ("captcha", ("请完成验证", "人机验证", "安全验证", "滑块验证", "拖动滑块", "验证码", "图形验证",
-                 "滑动验证", "点击验证", "安全检测", "访问验证", "verify you are human",
-                 "complete the captcha", "prove you are human")),
-    ("risk_control", ("checking your browser", "just a moment", "unusual traffic",
-                      "enable javascript and cookies", "ddos protection", "too many requests",
-                      "请求过于频繁", "访问受限", "拒绝访问", "系统检测到")),
-    ("login", ("请登录", "登录后", "sign in to continue", "log in to continue", "please log in")),
+# 只用来"找片段"，不用来判定性质
+_WATCH_WORDS = [
+    "验证", "安全验证", "人机", "滑块", "验证码", "登录", "请完成", "风控", "访问受限",
+    "请求过于频繁", "captcha", "verify", "challenge", "checking your browser", "just a moment",
+    "unusual traffic", "too many requests", "forbidden", "blocked",
 ]
 
-_SNIPPET = 600
+# 常见的验证/登录组件选择器（同样只用来"列出事实"）
+_WIDGET_LIST = [
+    "#nc_1_wrapper", ".nc-container", ".geetest_panel", ".geetest_holder", ".geetest_box",
+    ".cf-turnstile", "#challenge-form", ".g-recaptcha", ".h-captcha", "#captcha",
+    ".verify-wrap", ".verify-box", "iframe[src*='recaptcha']", "iframe[src*='hcaptcha']",
+    "iframe[src*='challenges.cloudflare.com']", "iframe[src*='captcha']",
+    "input[type=password]", "input[name*='captcha' i]",
+]
+
 _baselines: dict[str, tuple[str, int]] = {}
 
 
 @dataclass
-class Gate:
-    """一次人机门判定结果。"""
-
-    kind: str
-    confidence: str                      # high / medium / low
+class Facts:
     url: str = ""
     title: str = ""
-    evidence: list[str] = field(default_factory=list)
-
-    @property
-    def hard(self) -> bool:
-        """是否硬停（中/高置信才打断用户）。"""
-        return self.confidence in ("high", "medium")
+    length: int = 0
+    links: int = 0
+    sample: str = ""
+    hits: list[tuple[str, str]] = field(default_factory=list)     # (命中词, 原文片段)
+    visible: list[tuple[str, str]] = field(default_factory=list)   # (选择器, 尺寸)
+    hidden: list[str] = field(default_factory=list)
+    size_change: str = ""
 
 
 _DETECT_JS = """
 () => {
   const body = document.body;
   const text = body ? (body.innerText || '') : '';
+  const seen = (el) => {
+    try {
+      const rect = el.getBoundingClientRect();
+      return (el.offsetWidth > 0 || el.offsetHeight > 0) && rect.width > 20 && rect.height > 20;
+    } catch (e) { return false; }
+  };
+  const shown = [], hidden = [];
+  for (const sel of %s) {
+    const nodes = [...document.querySelectorAll(sel)];
+    if (!nodes.length) continue;
+    const hit = nodes.find(seen);
+    if (hit) {
+      const rect = hit.getBoundingClientRect();
+      shown.push([sel, Math.round(rect.width) + 'x' + Math.round(rect.height)]);
+    } else {
+      hidden.push(sel);
+    }
+  }
   return {
     url: location.href,
     title: document.title || '',
-    text: text.slice(0, %d),
-    len: text.length,
-    password: !!document.querySelector('input[type=password]'),
-    widgets: document.querySelectorAll(%r).length,
+    length: text.length,
+    links: document.querySelectorAll('a[href]').length,
+    sample: text.slice(0, %d),
+    widgetsVisible: shown,
+    widgetsHidden: hidden,
   };
 }
-""" % (_SNIPPET, _WIDGETS)
+""" % (json.dumps(_WIDGET_LIST), _SNIPPET)
 
 
-def _judge(info: dict, tab_id: str) -> Gate | None:
+def _facts(info: dict, tab_id: str) -> Facts:
+    """把页面读数整理成事实（不判定）。"""
     url = str(info.get("url", ""))
-    title = str(info.get("title", ""))
-    text = str(info.get("text", ""))
-    length = int(info.get("len", 0))
-    lowered = text.lower()
+    text = str(info.get("sample", ""))
+    length = int(info.get("length", 0))
+    facts = Facts(url=url, title=str(info.get("title", "")), length=length,
+                  links=int(info.get("links", 0)), sample=text,
+                  visible=[tuple(item) for item in (info.get("widgetsVisible") or [])],
+                  hidden=list(info.get("widgetsHidden") or []))
 
-    if url and _VERIFY_URL.search(url):
-        return Gate(RISK_CONTROL, "high", url, title, [f"URL 命中验证类路径：{url[:120]}"])
-    if info.get("widgets"):
-        return Gate(CAPTCHA, "high", url, title, [f"页面里有 {info['widgets']} 个已知验证组件"])
-    for kind, markers in _MARKERS:
-        for marker in markers:
-            if marker.lower() in lowered:
-                return Gate(kind, "high", url, title, [f"页面文案命中：{marker}"])
-    if url and _LOGIN_URL.search(url):
-        return Gate(LOGIN, "medium", url, title, [f"URL 命中登录类路径：{url[:120]}"])
-    if info.get("password"):
-        return Gate(LOGIN, "medium", url, title, ["页面里有密码输入框"])
+    lowered = text.lower()
+    for word in _WATCH_WORDS:
+        position = lowered.find(word.lower())
+        if position < 0:
+            continue
+        start = max(0, position - _CONTEXT)
+        end = min(len(text), position + len(word) + _CONTEXT)
+        facts.hits.append((word, text[start:end].replace("\n", " ")))
+        if len(facts.hits) >= 6:
+            break
 
     baseline = _baselines.get(tab_id)
-    if baseline and baseline[0].split("?")[0] == url.split("?")[0] and length < 200 and baseline[1] >= 800:
-        return Gate(RISK_CONTROL, "low", url, title,
-                    [f"正文从 {baseline[1]} 字缩到 {length} 字（同一地址）"])
-
-    if length > 0:
-        _baselines[tab_id] = (url, length)          # 正常页面才更新基线
-    return None
-
-
-def remember(tab_id: str, url: str, length: int) -> None:
-    """外部记录一次"正常页面"基线（工具读页面时调）。"""
+    if baseline and baseline[0].split("?")[0] == url.split("?")[0] and baseline[1] != length:
+        facts.size_change = f"{baseline[1]} → {length} chars (same address)"
     if length > 0:
         _baselines[tab_id] = (url, length)
+    return facts
 
 
-def reset(tab_id: str = "") -> None:
-    """清基线（关浏览器/关标签页时调）。"""
-    if tab_id:
-        _baselines.pop(tab_id, None)
-    else:
-        _baselines.clear()
-
-
-def format_gate(gate: Gate, prefix: str = "") -> str:
-    """把判定结果写成**给 AI 直接转述**的话：要用户做什么、做完怎么办。"""
-    if gate.kind == LOGIN:
-        headline = "需要人工：登录"
-        todo = "请用户在浏览器窗口里登录（profile 是持久的，登录态会保留，之后不用重登）"
-    elif gate.kind == CAPTCHA:
-        headline = "需要人工：人机验证"
-        todo = "请用户在浏览器窗口里完成验证（滑块/点选/图形验证码）"
-    else:
-        headline = "需要人工：安全验证（风控）"
-        todo = "请用户在浏览器窗口里完成验证；这类页面通常带 callbackUrl，过完会自动跳回原页"
-
-    lines = [f"{prefix}" if prefix else "", f"⚠️ {headline}"]
-    if gate.evidence:
-        lines.append("证据：" + "；".join(gate.evidence))
-    if gate.title:
-        lines.append(f"当前页面：{gate.title}")
-    lines.append(f"做什么：{todo}")
-    lines.append("完成后：**不要重新导航**（会再次触发风控）—— 先调 ved_status() 确认状态，"
-                 "再从当前页继续（ved_apis / ved_dom_tree / ved_act…）")
-    lines.append("数据层不受影响：已捕获的 API 仍可用 ved_apis / ved_inspect 查看。")
-    if not gate.hard:
-        lines.insert(1, "（低置信提示：可能只是页面变空，建议先跟用户确认一下）")
-    return "\n".join(line for line in lines if line != "")
-
-
-async def detect_async(page, tab_id: str = "") -> Gate | None:
-    """异步版（工具里用这个）。"""
+async def collect(page, tab_id: str = "") -> Facts | None:
+    """读一次页面事实；页面不可用返回 None。"""
     try:
         info = await page.evaluate(_DETECT_JS)
     except Exception:                                                           # noqa: BLE001
         return None
     if not isinstance(info, dict):
         return None
-    return _judge(info, tab_id)
+    return _facts(info, tab_id)
+
+
+def format_facts(facts: Facts) -> str:
+    """把事实排成给 AI 看的一段（只有事实，没有建议）。"""
+    lines = ["page facts",
+             f"  url     : {facts.url[:160]}",
+             f"  title   : {facts.title[:120]}",
+             f"  body    : {facts.length} chars, {facts.links} links"]
+    if facts.size_change:
+        lines.append(f"  size    : {facts.size_change}")
+    if facts.sample:
+        lines.append(f"  sample  : {facts.sample[:200].replace(chr(10), ' ')}")
+    if facts.hits:
+        for word, context in facts.hits:
+            lines.append(f"  hit     : {word} → \"{context}\"")
+    else:
+        lines.append("  hit     : (none)")
+    if facts.visible:
+        for selector, size in facts.visible[:5]:
+            lines.append(f"  visible : {selector} {size}")
+    else:
+        lines.append("  visible : (none of the watched selectors)")
+    if facts.hidden:
+        lines.append(f"  hidden  : {', '.join(facts.hidden[:5])}")
+    return "\n".join(lines)
+
+
+def reset(tab_id: str = "") -> None:
+    if tab_id:
+        _baselines.pop(tab_id, None)
+    else:
+        _baselines.clear()
+
+
+# ---- 调用方保持原调用形状（ved_goto / ved_act / ved_status / ved_chain），但语义已经是
+# "只给事实"：hard 恒为 False —— 我们不再替 AI 判定"要不要停下来叫用户"。
+Gate = Facts
+detect_async = collect
+
+
+def format_gate(facts: Facts, prefix: str = "") -> str:
+    return format_facts(facts)
+
+
+Facts.hard = property(lambda self: False)      # 永久 False：不判定
