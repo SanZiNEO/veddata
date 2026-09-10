@@ -41,8 +41,25 @@ def _human(size: int) -> str:
     return f"{value:.1f} GB"
 
 
+def _xdg_downloads() -> Path | None:
+    """Linux: ``~/.config/user-dirs.dirs`` 里的 ``XDG_DOWNLOAD_DIR``。"""
+    base = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
+    try:
+        for line in (base / "user-dirs.dirs").read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line.startswith("XDG_DOWNLOAD_DIR="):
+                continue
+            value = line.split("=", 1)[1].strip().strip('"').replace("$HOME", str(Path.home()))
+            path = Path(value)
+            if path.exists():
+                return path
+    except Exception:                                                           # noqa: BLE001
+        pass
+    return None
+
+
 def os_downloads_dir() -> Path | None:
-    """操作系统自己的"下载"文件夹（Windows 已知文件夹 → ~/Downloads）。拿不到返回 None。"""
+    """操作系统自己的"下载"文件夹；拿不到返回 None（**不猜**）。"""
     if sys.platform == "win32":
         try:
             from winreg import HKEY_CURRENT_USER, OpenKey, QueryValueEx
@@ -55,6 +72,10 @@ def os_downloads_dir() -> Path | None:
                 return path
         except Exception:                                                       # noqa: BLE001
             pass
+    elif sys.platform != "darwin":
+        xdg = _xdg_downloads()
+        if xdg is not None:
+            return xdg
     candidate = Path.home() / "Downloads"
     return candidate if candidate.exists() else None
 
@@ -64,6 +85,8 @@ def download_dir(profile: Path) -> Path | None:
 
     **拿不到就返回 None** —— 这时绝不猜、也绝不设 downloadPath，
     让浏览器按它自己的行为落盘（我们只报文件名与状态，不挪文件）。
+    偏好里若开着"每次询问保存位置"（``prompt_for_download``），同样返回 None ——
+    路径是用户每次现选的，我们不许替他做选择。
     """
     profile = Path(profile)
     for candidate in (profile / "Default" / "Preferences", profile / "Preferences"):
@@ -71,7 +94,10 @@ def download_dir(profile: Path) -> Path | None:
             prefs = json.loads(candidate.read_text(encoding="utf-8", errors="replace"))
         except Exception:                                                       # noqa: BLE001
             continue
-        directory = (prefs.get("download") or {}).get("default_directory")
+        download = prefs.get("download") or {}
+        if download.get("prompt_for_download"):
+            return None
+        directory = download.get("default_directory")
         if directory:
             return Path(directory)
     return os_downloads_dir()
