@@ -5,12 +5,27 @@ import asyncio
 from veddata import gate, observation, state
 
 
-async def _find_locator(page, text, kinds):
-    """按文本/占位符找一个可点击的 locator。
+def _is_selector(target: str) -> bool:
+    """``css=`` / ``xpath=`` / ``//`` 开头 → 当选择器；其余按可见文本匹配。"""
+    return target.startswith(("css=", "xpath=")) or target.startswith("//")
 
-    尝试顺序：placeholder（input）→ role（button/link）→ has_text 兜底。
+
+async def _find_locator(page, text, kinds):
+    """按 locator 找一个可点击的元素。
+
+    顺序：**选择器**（``target="css=a[href*='/download/']"`` 或 ``target="//a[...]"``）
+    → placeholder（input）→ role（button/link）→ has_text 兜底。
+    选择器命中就用它（精确），否则退回文本匹配。
     返回第一个能成功点击（timeout 3s）的 locator，找不到返回 None。
     """
+    if _is_selector(text):
+        try:
+            locator = page.locator(text).first
+            await locator.click(timeout=3000)
+            return locator
+        except Exception:
+            return None
+
     candidates = []
     if kinds in ("input,textarea",):
         candidates.append(page.get_by_placeholder(text).first)
@@ -21,7 +36,8 @@ async def _find_locator(page, text, kinds):
         candidates.append(page.get_by_role("link", name=text).first)
     if "span" in kinds or kinds in ("a,button,div", "a,li,span,option"):
         candidates.append(page.get_by_text(text, exact=False).first)
-    candidates.append(page.locator(",".join(kinds)).filter(has_text=text).first)
+    selector = kinds if isinstance(kinds, str) else ",".join(kinds)
+    candidates.append(page.locator(selector).filter(has_text=text).first)
 
     for locator in candidates:
         try:
@@ -131,6 +147,8 @@ async def ved_act(
        ved_act("input", "python教程", target="搜索")
        ved_act("click", target="下一页")
        ved_act("select", "最多播放", target="综合排序")
+       ved_act("click", target="css=a[href*='/download/']")     ← target 也接受选择器
+       ved_act("click", target="//a[contains(@href,'/download/')]")
 
     2. Chain: ved_act(actions=[
          {"action": "input", "value": "python教程", "target": "搜索"},

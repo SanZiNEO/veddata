@@ -96,5 +96,12 @@ def test_download_dir_reads_profile_preferences(tmp_path):
     assert str(downloads.download_dir(tmp_path)) == r"E:\Downloads"
 
 
-def test_download_dir_falls_back_to_profile(tmp_path):
-    assert downloads.download_dir(tmp_path) == tmp_path / "downloads"
+def test_download_dir_falls_back_to_os_downloads(tmp_path, monkeypatch):
+    monkeypatch.setattr(downloads, "os_downloads_dir", lambda: downloads.Path(r"E:\Downloads"))
+    assert str(downloads.download_dir(tmp_path)) == r"E:\Downloads"
+
+
+def test_download_dir_unknown_returns_none(tmp_path, monkeypatch):
+    """读不到就不猜：返回 None（调用方不会给浏览器设 downloadPath，文件不挪）。"""
+    monkeypatch.setattr(downloads, "os_downloads_dir", lambda: None)
+    assert downloads.download_dir(tmp_path) is None

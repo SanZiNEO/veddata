@@ -21,6 +21,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 from pathlib import Path
 
 MAX_QUEUE = 10
@@ -39,8 +41,30 @@ def _human(size: int) -> str:
     return f"{value:.1f} GB"
 
 
-def download_dir(profile: Path) -> Path:
-    """从 profile 偏好里读用户自己的下载目录（读不到就退回 <profile>/downloads）。"""
+def os_downloads_dir() -> Path | None:
+    """操作系统自己的"下载"文件夹（Windows 已知文件夹 → ~/Downloads）。拿不到返回 None。"""
+    if sys.platform == "win32":
+        try:
+            from winreg import HKEY_CURRENT_USER, OpenKey, QueryValueEx
+
+            with OpenKey(HKEY_CURRENT_USER,
+                         r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders") as key:
+                value, _ = QueryValueEx(key, "{374DE290-123F-4565-9164-39C4925E467B}")
+            path = Path(str(value).replace("%USERPROFILE%", os.path.expanduser("~")))
+            if path.exists():
+                return path
+        except Exception:                                                       # noqa: BLE001
+            pass
+    candidate = Path.home() / "Downloads"
+    return candidate if candidate.exists() else None
+
+
+def download_dir(profile: Path) -> Path | None:
+    """用户自己的下载目录：先看 profile 偏好，再看系统"下载"文件夹。
+
+    **拿不到就返回 None** —— 这时绝不猜、也绝不设 downloadPath，
+    让浏览器按它自己的行为落盘（我们只报文件名与状态，不挪文件）。
+    """
     profile = Path(profile)
     for candidate in (profile / "Default" / "Preferences", profile / "Preferences"):
         try:
@@ -50,7 +74,7 @@ def download_dir(profile: Path) -> Path:
         directory = (prefs.get("download") or {}).get("default_directory")
         if directory:
             return Path(directory)
-    return profile / "downloads"
+    return os_downloads_dir()
 
 
 def _line(item: dict) -> str:
@@ -113,19 +137,24 @@ def on_progress(params: dict) -> None:
 async def attach(cdp, profile: Path) -> None:
     """挂事件 + 把下载目录告诉浏览器（目录仍是用户自己的，文件落原处）。"""
     global _download_dir
-    _download_dir = download_dir(profile)
-    try:
-        _download_dir.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass
+    _download_dir = download_dir(profile)        # None = 拿不到用户目录，绝不猜
+    if _download_dir is not None:
+        try:
+            _download_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            _download_dir = None
     cdp.on("Browser.downloadWillBegin", on_will_begin)
     cdp.on("Browser.downloadProgress", on_progress)
+    # 目录已知 → allow + downloadPath：文件仍落在原处，我们因此知道完整路径；
+    # 目录未知 → default：让浏览器按自己的行为落盘，我们只报文件名与状态（不挪文件）。
+    params: dict = {"eventsEnabled": True}
+    if _download_dir is not None:
+        params["behavior"] = "allow"
+        params["downloadPath"] = str(_download_dir)
+    else:
+        params["behavior"] = "default"
     try:
-        await cdp.send("Browser.setDownloadBehavior", {
-            "behavior": "allow",
-            "downloadPath": str(_download_dir),
-            "eventsEnabled": True,
-        })
+        await cdp.send("Browser.setDownloadBehavior", params)
     except Exception:                                                           # noqa: BLE001
         pass
 
