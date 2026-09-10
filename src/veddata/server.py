@@ -33,6 +33,34 @@ RECOMMENDED WORKFLOW:
 
 state.mcp = mcp
 
+# 每个工具返回前顺手带上"下载事实"（有下载才加，没有就不加）——
+# 在这里包一层，避免在 29 个工具里各写一遍。
+_original_tool = mcp.tool
+
+
+def _tool_with_downloads(*args, **kwargs):
+    import functools
+    import inspect
+
+    decorate = _original_tool(*args, **kwargs)
+
+    def wrapper(fn):
+        @functools.wraps(fn)
+        async def call(*a, **kw):
+            from veddata import downloads
+
+            result = fn(*a, **kw)
+            if inspect.isawaitable(result):
+                result = await result
+            return downloads.append_facts(result)
+
+        return decorate(call)
+
+    return wrapper
+
+
+mcp.tool = _tool_with_downloads
+
 import veddata.tools.navigate
 import veddata.tools.observe
 import veddata.tools.act

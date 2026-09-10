@@ -86,6 +86,13 @@ class BrowserSession:
         browser = await self._playwright.chromium.connect_over_cdp(address, no_defaults=True)
         contexts = browser.contexts
         self._context = contexts[0] if contexts else await browser.new_context()
+        # 下载事实：订阅 browser 级下载事件（只记录，不接管落盘）
+        from veddata import downloads
+        try:
+            self._downloads_cdp = await browser.new_browser_cdp_session()
+            await downloads.attach(self._downloads_cdp, paths.profile_dir())
+        except Exception:
+            self._downloads_cdp = None
         self._after_attach()
         return self._context
 
