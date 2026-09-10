@@ -22,7 +22,35 @@ A Model Context Protocol (MCP) server for data-source discovery on web pages —
 - Python 3.10 or newer
 - Chrome or Edge (launched headed by default, with a persistent profile that keeps login state)
 
-## Getting started
+## Install and use
+
+Run it without installing anything (recommended):
+
+```json
+{
+  "mcpServers": {
+    "veddata": {
+      "command": "uvx",
+      "args": ["veddata", "--response-dir", "/path/to/out"]
+    }
+  }
+}
+```
+
+Or install it once with `uv tool install veddata` (or `pip install veddata`), then
+
+```json
+{
+  "mcpServers": {
+    "veddata": {
+      "command": "veddata",
+      "args": ["--response-dir", "/path/to/out"]
+    }
+  }
+}
+```
+
+Run from source (for development):
 
 ```bash
 uv venv
@@ -109,19 +137,6 @@ Client configuration (standard input/output):
 - **Observation** — after a change outside tool calls (self-navigation, tabs added or closed), state-dependent tools return a factual note instead of executing; `ved_status` and `ved_tabs` re-establish observation.
 - **Human in the loop** — the window is visible; sign-in or verification is completed by the user in the window, and tools report the page facts.
 - **Browser lifecycle** — a browser we launched is closed by `ved_close`; a browser attached through `BROWSER_ADDRESS` is only disconnected.
-
-Once published to PyPI you can run it directly, without cloning the repository:
-
-```json
-{
-  "mcpServers": {
-    "veddata": {
-      "command": "uvx",
-      "args": ["veddata", "--response-dir", "/path/to/out"]
-    }
-  }
-}
-```
 
 ## Example: finding a download URL on a site with no API documentation
 

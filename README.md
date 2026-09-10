@@ -22,7 +22,35 @@
 - Python 3.10 及以上
 - Chrome 或 Edge（默认以有窗口模式启动，并使用持久化配置目录保留登录状态）
 
-## 快速开始
+## 安装与使用
+
+一次性运行（无需安装，推荐）：
+
+```json
+{
+  "mcpServers": {
+    "veddata": {
+      "command": "uvx",
+      "args": ["veddata", "--response-dir", "E:\\path\\to\\out"]
+    }
+  }
+}
+```
+
+或先安装再使用：`uv tool install veddata`（或 `pip install veddata`），然后
+
+```json
+{
+  "mcpServers": {
+    "veddata": {
+      "command": "veddata",
+      "args": ["--response-dir", "E:\\path\\to\\out"]
+    }
+  }
+}
+```
+
+从源码运行（开发用）：
 
 ```bash
 uv venv
@@ -109,19 +137,6 @@ uv pip install -e ".[dev]"
 - **状态观测**：发生在工具之外的变化（页面自行跳转、标签页增删）之后，依赖活状态的工具会返回一条事实说明而不执行；`ved_status`、`ved_tabs` 会重新建立观测。
 - **人机协作**：界面可见，登录或验证由用户在窗口中完成；工具照实报告当前页面事实。
 - **浏览器生命周期**：自行启动的浏览器由 `ved_close` 关闭；通过 `BROWSER_ADDRESS` 接管的仅断开连接。
-
-发布到 PyPI 之后，也可以直接运行，不用克隆仓库：
-
-```json
-{
-  "mcpServers": {
-    "veddata": {
-      "command": "uvx",
-      "args": ["veddata", "--response-dir", "E:\\path\\to\\out"]
-    }
-  }
-}
-```
 
 ## 示例：没有接口文档的站点，怎么拿到下载直链
 
