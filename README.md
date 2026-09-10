@@ -1,5 +1,7 @@
 # 斥候（veddata）
 
+<!-- mcp-name: io.github.SanZiNEO/veddata -->
+
 一个模型上下文协议（MCP）服务器：在网页上做数据源发现 —— 捕获网络请求、提取内嵌数据、分析脚本，并通过交互与监测点跟踪数据流向。
 
 [English](README.en.md)

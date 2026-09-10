@@ -1,6 +1,7 @@
 {
-  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.SanZiNEO/veddata",
+  "title": "veddata",
   "description": "MCP server for web data-source discovery: capture network traffic, extract embedded data, analyse scripts, and track data flow through interaction and watch points.",
   "version": "0.1.0",
   "repository": {

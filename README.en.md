@@ -1,5 +1,7 @@
 # veddata
 
+<!-- mcp-name: io.github.SanZiNEO/veddata -->
+
 A Model Context Protocol (MCP) server for data-source discovery on web pages — capturing network traffic, extracting embedded data, analysing scripts, and tracking data flow through interaction and watch points.
 
 [中文](README.md)
