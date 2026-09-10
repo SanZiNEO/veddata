@@ -4,7 +4,7 @@
 
 A Model Context Protocol (MCP) server for data-source discovery on web pages — capturing network traffic, extracting embedded data, analysing scripts, and tracking data flow through interaction and watch points.
 
-[中文](README.md)
+[中文](https://github.com/SanZiNEO/veddata/blob/main/README.md)
 
 ## Features
 
@@ -170,7 +170,7 @@ python scripts/smoke.py
 
 ## License
 
-MIT License — see [LICENSE](LICENSE).
+MIT License — see [LICENSE](https://github.com/SanZiNEO/veddata/blob/main/LICENSE).
 
 ## Disclaimer
 

@@ -4,7 +4,7 @@
 
 一个模型上下文协议（MCP）服务器：在网页上做数据源发现 —— 捕获网络请求、提取内嵌数据、分析脚本，并通过交互与监测点跟踪数据流向。
 
-[English](README.en.md)
+[English](https://github.com/SanZiNEO/veddata/blob/main/README.en.md)
 
 ## 功能
 
@@ -170,7 +170,7 @@ python scripts/smoke.py
 
 ## 许可
 
-MIT License，详见 [LICENSE](LICENSE)。
+MIT License，详见 [LICENSE](https://github.com/SanZiNEO/veddata/blob/main/LICENSE)。
 
 ## 免责声明
 
