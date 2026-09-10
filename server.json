@@ -3,7 +3,7 @@
   "name": "io.github.SanZiNEO/veddata",
   "title": "veddata",
   "description": "MCP server for web data-source discovery: capture network traffic, extract embedded data, analyse scripts, and track data flow through interaction and watch points.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "repository": {
     "url": "https://github.com/SanZiNEO/veddata",
     "source": "github"
@@ -12,7 +12,7 @@
     {
       "registryType": "pypi",
       "identifier": "veddata",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
