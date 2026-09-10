@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "veddata"
-version = "0.1.1"
+version = "0.1.2"
 description = "MCP server for AI agents: discover a web page's data sources — network APIs, embedded data, scripts — and drive the page to reach them"
 readme = "README.md"
 license = {text = "MIT"}
