@@ -7,7 +7,8 @@ name = "veddata"
 version = "0.1.2"
 description = "MCP server for AI agents: discover a web page's data sources — network APIs, embedded data, scripts — and drive the page to reach them"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 authors = [
     {name = "ShanZhi", email = "SanZiNEO@outlook.com"},
@@ -16,7 +17,6 @@ keywords = ["mcp", "mcp-server", "ai-agent", "scraping", "web-scraping", "api-di
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Environment :: Console",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3.10",
